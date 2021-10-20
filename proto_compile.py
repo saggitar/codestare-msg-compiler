@@ -218,22 +218,38 @@ class Compiler:
 
 
 class Rewriter:
-    IMPORT = re.compile(r'^import .+', flags=re.MULTILINE)
+    IMPORT = re.compile(r'^(import ")(.+)(")', flags=re.MULTILINE)
 
     def __init__(self):
         self.proto_imports = None
+        self.contents = None
+        self._prefix = ""
 
-    def analyze(self, *sources):
-        contents = {s: Path(s).read_text(encoding='utf-8') for s in sources}
-        self.proto_imports = {s: self.IMPORT.match(content) for s, content in contents.items()}
-        self.proto_imports = {s: match.string for s, match in self.proto_imports.items() if match}
-        print(self.proto_imports)
+    def read(self, *sources):
+        self.contents = {s: Path(s).read_text(encoding='utf-8') for s in sources}
+        return self
+
+    def prefix(self, value):
+        self._prefix = value
+        return self
+
+    def rewrite(self, match):
+        return self.IMPORT.sub(r'\1{pre}\2\3'.format(pre=self._prefix), ''.join(match.groups()))
+
+    def replace(self, dry_run=False):
+        for f in self.contents:
+            self.contents[f] = self.IMPORT.sub(self.rewrite, self.contents[f])
+            if dry_run:
+                continue
+
+            with open(f, 'w', encoding='utf-8') as stream:
+                stream.write(self.contents[f])
 
 
 def check_fire():
     try:
         import fire
-    except ImportError as e:
+    except ImportError:
         distutils.log.error("Can't use CLI for compiler if python-fire is not installed!"
                             "Did you install the package with [cli]?")
     else:
@@ -249,13 +265,13 @@ def rewrite():
     if fire:
         fire.Fire(Rewriter)
 
+
 class UbiiCompileProto(Command):
 
     description = "Compile proto files"
     user_options = [
         ('protoc=', None, 'protoc compiler location'),
         ('output=', None, 'Output directory for compiled files'),
-        ('proto_package=', None, '(experimental) try to rewrite imports to generate a different package structure'),
         ('includes=', None, 'Include directories for .proto files'),
         ('protofiles=', None, 'Protobuf source files to compile'),
         ('options=', 'o', f"Options for compilation, possible values are "
@@ -275,10 +291,6 @@ class UbiiCompileProto(Command):
         self.set_undefined_options('build_py',
                                    ('build_lib', 'output'))
 
-        self.set_undefined_options('build_py',
-                                   ('proto_package', 'proto_package'))
-
-        self.ensure_string('proto_package')
         self.ensure_dirname('output')
         self.ensure_dir_list('includes')
         self.ensure_string_list('options')
@@ -292,7 +304,6 @@ class UbiiCompileProto(Command):
     def initialize_options(self) -> None:
         self.protoc = None
         self.output = None
-        self.proto_package = None
         self.includes: PathList = None
         self.protofiles: PathList = None
         self.options = None
@@ -384,5 +395,3 @@ class UbiiBuildPy(build_py):
     sub_commands = [('compile_python', None),
                     ('compile_mypy', has_mypy),
                     ('compile_betterproto', has_betterproto)]
-
-
