@@ -264,11 +264,6 @@ class UbiiCompileProto(Command):
     ]
 
     def run(self):
-        if self.proto_package:
-            rewriter = Rewriter()
-            rewriter.analyze(*self.protofiles)
-            return
-
         compiler = Compiler(protoc=self.protoc)
         args = {k: v for k, v in vars(self).items() if k in ['options', 'output', 'includes', 'sources']}
         compiler.compile(*self.protofiles, **args)
