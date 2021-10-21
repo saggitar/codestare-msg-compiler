@@ -19,6 +19,7 @@ import sys
 import os
 import subprocess
 import distutils.log
+from abc import ABC
 from enum import Flag, auto
 from functools import reduce
 from warnings import warn
@@ -265,8 +266,31 @@ def rewrite():
     if fire:
         fire.Fire(Rewriter)
 
+class PathCommand(Command, ABC):
+    def ensure_path_list(self, option):
+        self.ensure_string_list(option)
+        val = getattr(self, option)
+        if val is None:
+            return
 
-class UbiiCompileProto(Command):
+        paths = [Path(s) for s in val]
+        not_exist = [p for p in paths if not p.exists()]
+        assert not any(not_exist), f"Paths {', '.join(str(o.absolute()) for o in not_exist)} don't exist."
+        setattr(self, option, paths)
+
+    def ensure_dir_list(self, option):
+        self.ensure_path_list(option)
+        val = getattr(self, option)
+        if val is None:
+            return
+
+        not_dir = [p for p in val if not p.is_dir()]
+        assert not any(not_dir), f"Paths {', '.join(str(o.absolute()) for o in not_dir)} are not directories."
+        setattr(self, option, val)
+
+
+
+class CompileProto(PathCommand):
 
     description = "Compile proto files"
     user_options = [
@@ -308,42 +332,54 @@ class UbiiCompileProto(Command):
         self.protofiles: PathList = None
         self.options = None
 
-    def ensure_path_list(self, name):
-        self.ensure_string_list(name)
-        option = [Path(s) for s in getattr(self, name)]
-        not_exist = [p for p in option if not p.exists()]
-        assert not any(not_exist), f"Paths {', '.join(str(o.absolute()) for o in not_exist)} don't exist."
-        setattr(self, name, option)
-
-    def ensure_dir_list(self, name):
-        self.ensure_path_list(name)
-        option = getattr(self, name)
-        not_dir = [p for p in option if not p.is_dir()]
-        assert not any(not_dir), f"Paths {', '.join(str(o.absolute()) for o in not_dir)} are not directories."
-        setattr(self, name, option)
 
 
-class UbiiCompilePython(UbiiCompileProto):
-    user_options = UbiiCompileProto.user_options[:-1]
+class CompileProtoPython(CompileProto):
+    user_options = CompileProto.user_options[:-1]
 
     def initialize_options(self) -> None:
         super().initialize_options()
         self.options = 'py'
 
 
-class UbiiCompileMypy(UbiiCompileProto):
-    user_options = UbiiCompileProto.user_options[:-1]
+class CompileProtoMypy(CompileProto):
+    user_options = CompileProto.user_options[:-1]
 
     def initialize_options(self) -> None:
         super().initialize_options()
         self.options = 'mypy'
 
-class UbiiCompileBetterproto(UbiiCompileProto):
-    user_options = UbiiCompileProto.user_options[:-1]
+
+class CompileBetterproto(CompileProto):
+    user_options = CompileProto.user_options[:-1]
 
     def initialize_options(self) -> None:
         super().initialize_options()
         self.options = 'better'
+
+
+class RewriteProto(PathCommand):
+    user_options = [
+        ('proto-package=', None, '(experimental) try to rewrite imports to fake different package structure'),
+        ('include-proto=', None, 'Root dir for proto files'),
+    ]
+
+    def initialize_options(self) -> None:
+        self.proto_package = None
+        self.include_proto = None
+
+    def finalize_options(self) -> None:
+        self.set_undefined_options('build_py',
+                                   ('proto_package', 'proto_package'))
+
+        self.set_undefined_options('build_py',
+                                   ('include_proto', 'include_proto'))
+
+        self.ensure_string('proto_package')
+        self.ensure_path_list('include_proto')
+
+    def run(self) -> None:
+        rewriter = Rewriter()
 
 
 class UbiiBuildPy(build_py):
@@ -387,11 +423,16 @@ class UbiiBuildPy(build_py):
     def has_mypy(self):
         return self.has_module('mypy', 'mypy_protobuf')
 
-
     def has_betterproto(self):
         return self.has_module('betterproto')
 
+    def should_rewrite(self):
+        return bool(self.proto_package)
 
-    sub_commands = [('compile_python', None),
-                    ('compile_mypy', has_mypy),
-                    ('compile_betterproto', has_betterproto)]
+
+    sub_commands = [
+        ('rewrite_proto', should_rewrite),
+        ('compile_python', None),
+        ('compile_mypy', has_mypy),
+        ('compile_betterproto', has_betterproto),
+    ]
