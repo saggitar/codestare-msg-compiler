@@ -493,6 +493,11 @@ class CompileProto(PathCommand):
         for command in self.get_sub_commands():
             self.run_command(command)
 
+        protobuf_packages = setuptools.find_namespace_packages(self.build_lib)
+        self.announce(f"built protobuf packages: {protobuf_packages}", distutils.log.INFO)
+        with Path('./.py_protobuf_packages').open('w') as stream:
+            stream.write('\n'.join(protobuf_packages))
+
     has_mypy = has_module('mypy', 'mypy_protobuf')
     has_betterproto = has_module('betterproto')
 
@@ -624,8 +629,6 @@ class UbiiBuildPy(build_py):
         super().run()
         for command in self.get_sub_commands():
             self.run_command(command)
-
-        self.distribution.packages = setuptools.find_namespace_packages(where=self.build_lib)
 
     sub_commands = [
         ('compile_proto', None),
