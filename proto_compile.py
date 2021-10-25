@@ -559,13 +559,17 @@ class GenerateInits(PathCommand):
         ('packages', None, 'generate for these packages only'),
         ('recursive', None, 'if set, you only need to specify parent packages, all subpackages will also be considered'),
         ('no-recursive', None, 'only the exact packages specified in `packages` are considered. [default]'),
+        ('use-wildcards', None, 'if set, init files will fildcard import everything from all submodules (experimental)'),
+        ('no-use-wildcards', None, 'if set init files will be empty'),
     ]
 
-    boolean_options = ['recursive']
-    negative_opt = {'no-recursive': 'recursive'}
+    boolean_options = ['recursive', 'use-wildcards']
+    negative_opt = {'no-recursive': 'recursive',
+                    'no-use-wildcards': 'use-wildcards'}
 
     def initialize_options(self) -> None:
         self.recursive = 0
+        self.use_wildcards = 0
         self.package_root = None
         self.packages = None
 
@@ -589,12 +593,11 @@ class GenerateInits(PathCommand):
             modules = (p.stem for p in package.glob('*.py') if not p.stem.startswith('_'))
             packages = (p.stem for p in package.glob('*') if not p.stem.startswith('_') and p.is_dir())
             with (package / '__init__.py').open('w') as f:
-                f.write('\n'.join(f"from .{s} import *" for s in chain(modules, packages)))
+                if self.use_wildcards:
+                    f.write('\n'.join(f"from .{s} import *" for s in chain(modules, packages)))
 
         self.announce(f"Generated __init__.py files for "
-                      f"python packages {self.packages}{' recursively' if self.recursive else ''}" , distutils.log.INFO)
-
-
+                      f"python packages {self.packages}{' recursively' if self.recursive else ''}", distutils.log.INFO)
 
 
 class UbiiBuildPy(build_py):
