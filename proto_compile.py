@@ -269,7 +269,6 @@ class Compiler:
 
             self.call(*protoc_files, **kwargs, **protoc_args)
 
-
     def __del__(self):
         for _, tmp in self.tmp_dirs.items():
             tmp.cleanup()
@@ -404,9 +403,10 @@ class CompileBase(PathCommand):
         self.set_undefined_options('rewrite_proto',
                                    ('outputs', 'includes'))
 
-        self.set_undefined_options('build_py',
-                                   ('dry_run', 'dry_run'),
-                                   ('build_lib', 'output'))
+        self.set_undefined_options('compile_proto',
+                                   ('build_lib', 'output'),
+                                   ('dry_run', 'dry_run')
+                                   )
 
         self.ensure_dirname('output')
         self.ensure_dir_list('includes')
@@ -468,14 +468,20 @@ class CompileProto(PathCommand):
     user_options = [
         ('include-proto=', None, 'root dir for proto files'),
         ('proto-package=', None, 'parent package that will be enforced for protobuf modules'),
+        ('build_lib', None, 'output directory for protobuf library'),
+        ('dry_run', None, 'don\'t do anything but show protoc commands')
     ]
 
     def initialize_options(self) -> None:
         self.include_proto = None
         self.proto_package = None
+        self.build_lib = None
+        self.dry_run = None
 
     def finalize_options(self) -> None:
         self.set_undefined_options('build_py',
+                                   ('build_lib', 'build_lib'),
+                                   ('dry_run', 'dry_run'),
                                    ('include_proto', 'include_proto'))
 
         self.ensure_path_list('include_proto')
