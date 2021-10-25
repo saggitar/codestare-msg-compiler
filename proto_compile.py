@@ -42,6 +42,8 @@ from typing import List, Union, Optional, Dict
 
 CompileOptionStr = Union['Compiler.CompileOption', str]
 PathList = Optional[List[Path]]
+PY_PACKAGE_INFO = ".py_protobuf_packages"
+
 
 class CompileOption(Flag):
     """
@@ -490,13 +492,35 @@ class CompileProto(PathCommand):
             self.announce(f"Including *.proto files from path[s] {self.include_proto}", distutils.log.INFO)
 
     def run(self):
+        info_file = Path(f'./{PY_PACKAGE_INFO}')
+        if info_file.exists():
+            with info_file.open('r') as stream:
+                compiled_packages = stream.readlines()
+        else:
+            compiled_packages = None
+
+        missing = [p for p in compiled_packages or () if p not in self.distribution.packages]
+        if missing:
+            warn(f"protobuf packages {','.join(missing)} are missing from setup.cfg / setup.py, but have been compiled.")
+
         for command in self.get_sub_commands():
             self.run_command(command)
 
-        protobuf_packages = setuptools.find_namespace_packages(self.build_lib)
-        self.announce(f"built protobuf packages: {protobuf_packages}", distutils.log.INFO)
-        with Path('./.py_protobuf_packages').open('w') as stream:
-            stream.write('\n'.join(protobuf_packages))
+        current = setuptools.find_namespace_packages(self.build_lib)
+        self.announce(f"built protobuf packages: {current}", distutils.log.INFO)
+
+        diff = set(compiled_packages) - set(current)
+        if diff:
+            warn(f"compiled protobuf packages changed since last build. writing new packages to {PY_PACKAGE_INFO}_last")
+            outfile = info_file.parent / f"{info_file.name}_new"
+        elif not compiled_packages:
+            outfile = info_file
+        else:
+            outfile = None
+
+        if outfile:
+            with outfile.open('w') as stream:
+                stream.write('\n'.join(current))
 
     has_mypy = has_module('mypy', 'mypy_protobuf')
     has_betterproto = has_module('betterproto')
