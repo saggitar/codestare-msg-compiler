@@ -524,16 +524,12 @@ class RewriteProto(PathCommand):
         self.outputs = None
 
     def finalize_options(self) -> None:
-        self.set_undefined_options('build_py',
-                                   ('dry_run', 'dry_run'),
-                                   ('build_lib', 'outputs')
-                                   )
-
         self.set_undefined_options('compile_proto',
+                                   ('dry_run', 'dry_run'),
+                                   ('build_lib', 'outputs'),
                                    ('proto_package', 'proto_package'),
                                    ('include_proto', 'inputs'),
                                    )
-
 
         if self.inplace:
             self.outputs = self.inputs
