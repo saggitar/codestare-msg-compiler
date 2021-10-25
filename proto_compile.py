@@ -593,7 +593,7 @@ class GenerateInits(PathCommand):
         """
 
         search_dirs = [Path(self.package_root) / op.join(*package.split('.')) for package in self.packages or ()]
-        searches = [glob(f"{p}/{'**' if self.recursive else '*'}/") for p in search_dirs] + [search_dirs]
+        searches = [p.glob(f"{'**' if self.recursive else '*'}/") for p in search_dirs]
 
         for package in chain(*searches):
             package = Path(package)
@@ -626,9 +626,10 @@ class UbiiBuildPy(build_py):
                 self.include_proto = [os.fspath(p) for p in parent_paths]
 
     def run(self):
-        super().run()
         for command in self.get_sub_commands():
             self.run_command(command)
+
+        super().run()
 
     sub_commands = [
         ('compile_proto', None),
