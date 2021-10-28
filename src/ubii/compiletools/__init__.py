@@ -13,5 +13,5 @@ def has_module(*modules):
     return inner
 
 
-def find_proto_files(*paths):
-    return list(dict.fromkeys(chain(*[p.glob('**/*.proto') for p in paths])))
+def find_proto_files(*paths, recursive=True):
+    return list(dict.fromkeys(chain(*[p.glob(f"{'**/' if recursive else ''}*.proto") for p in paths])))

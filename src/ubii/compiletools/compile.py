@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import sys
+from functools import partial
 from warnings import warn
 from distutils.spawn import find_executable
 from pathlib import Path
@@ -10,6 +11,12 @@ from typing import List, Optional, Dict
 
 from . import find_proto_files
 from .options import CompileOption
+
+# Regex is taken from setuptools.dist.check_packages, which we don't want to use here since it's supposed
+# to be used with distutils.setup_keywords entrypoints.
+# I still like the fact that I can trust this regex.
+package_regex = r'\w+(\.\w+)*'
+check_packages = partial(re.match, package_regex)
 
 
 class Compiler:
@@ -100,31 +107,33 @@ class Compiler:
 
 class Rewriter:
     IMPORT = re.compile(r'^(import ")(.+)(")', flags=re.MULTILINE)
-    PACKAGE = re.compile(r'^([a-z]+\.?)*([a-z])$')
+    PACKAGE = re.compile(f"^package {package_regex}$")
 
     def __init__(self):
         self.proto_imports = None
         self.contents: Optional[Dict[Path, str]] = None
+        self.imports: Optional[Dict[Path, List[Path]]] = None
         self.parents = None
         self._outdir = None
         self._prefix = ""
 
     def read(self, *sources: Path):
         found = {s: find_proto_files(s) for s in sources if s.is_dir()}
-        no_proto_dirs = [s for s in sources if not s in found]
-        assert not no_proto_dirs, f"Some path[s] from {no_proto_dirs} are no directories or don't contain .proto files."
+        no_proto_dirs = [s for s in sources if not s in found or not found[s]]
+        assert not no_proto_dirs, f"Check path[s] {no_proto_dirs}: Not a directory or does not contain a .proto file."
 
         # invert dictionary to lookup parents
         self.parents = {path: parent for parent, paths in found.items() for path in paths}
         self.contents = {path: path.read_text(encoding='utf-8') for path in self.parents}
+        imports = {p: self.IMPORT.match(c) for p,c in self.contents.items()}
         return self
 
     def prefix(self, value):
         if value is None:
             return
 
-        valid = self.PACKAGE.match(value)
-        assert valid, f"{value} does not seem to be a valid package name. It can only contain lowercase letters and dots."
+        valid = check_packages(value)
+        assert valid, f"{value} not a valid package name, please use only.-separated package names"
 
         self._prefix = '/'.join(value.split('.')) + '/'
         return self
