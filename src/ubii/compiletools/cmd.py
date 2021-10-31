@@ -237,12 +237,14 @@ class RewriteProto(PathCommand):
 
     def run(self) -> None:
         rewriter = Rewriter()
-        rewriter.prefix(self.proto_package)
+        rewriter.root_package = self.proto_package
 
         for input, output in zip(self.inputs, self.outputs):
             rewriter.read(input)
-            rewriter.output_dir(output)
-            rewriter.replace(dry_run=self.dry_run)
+            rewriter.output_root = output
+            rewriter.fix_imports()
+            rewriter.fix_packages()
+            rewriter.write(dry_run=self.dry_run)
 
 
 class GenerateInits(PathCommand):

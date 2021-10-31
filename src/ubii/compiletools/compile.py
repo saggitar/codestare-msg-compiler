@@ -1,21 +1,21 @@
 import distutils.log
 import os
+import pathlib
 import re
 import subprocess
+from itertools import chain, dropwhile, islice, takewhile
+
 import sys
 from functools import partial
 from warnings import warn
 from distutils.spawn import find_executable
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Callable
 
 from . import find_proto_files
 from .options import CompileOption
 
-# Regex is taken from setuptools.dist.check_packages, which we don't want to use here since it's supposed
-# to be used with distutils.setup_keywords entrypoints.
-# I still like the fact that I can trust this regex.
-package_regex = r'\w+(\.\w+)*'
+package_regex = r'(\w+)((?:\.\w+)*)'
 check_packages = partial(re.match, package_regex)
 
 
@@ -106,60 +106,126 @@ class Compiler:
 
 
 class Rewriter:
-    IMPORT = re.compile(r'^(import ")(.+)(")', flags=re.MULTILINE)
-    PACKAGE = re.compile(f"^package {package_regex}$")
+    """
+    Rewrite proto files to force python package structure
+    which mirrors protobuf package declarations.
+    """
 
-    def __init__(self):
-        self.proto_imports = None
-        self.contents: Optional[Dict[Path, str]] = None
-        self.imports: Optional[Dict[Path, List[Path]]] = None
-        self.parents = None
-        self._outdir = None
-        self._prefix = ""
+    _IMPORT = re.compile(r'^import "((?:\w+/)*)(\w+\.proto)";$', flags=re.MULTILINE)
+    _PACKAGE = re.compile(r'^package {pkg};$'.format(pkg=package_regex), flags=re.MULTILINE)
 
-    def read(self, *sources: Path):
+    def __init__(self,
+                 root_package: str = None,
+                 output_root: os.PathLike = './'):
+
+        self._contents: Optional[Dict[Path, str]] = None
+        self._roots: Optional[Dict[Path, Path]] = None
+        self.root_package = root_package
+        self.output_root = output_root
+
+    def read(self, *sources: os.PathLike):
+        """
+        Reads .proto files from a directory, manipulate them with the other commands afterwards.
+        """
+        sources = [Path(s) for s in sources]
         found = {s: find_proto_files(s) for s in sources if s.is_dir()}
         no_proto_dirs = [s for s in sources if not s in found or not found[s]]
         assert not no_proto_dirs, f"Check path[s] {no_proto_dirs}: Not a directory or does not contain a .proto file."
 
         # invert dictionary to lookup parents
-        self.parents = {path: parent for parent, paths in found.items() for path in paths}
-        self.contents = {path: path.read_text(encoding='utf-8') for path in self.parents}
-        imports = {p: self.IMPORT.match(c) for p,c in self.contents.items()}
+        self._roots = {path: root for root, paths in found.items() for path in paths}
+        self._contents = {path: path.read_text(encoding='utf-8') for path in self._roots}
         return self
 
-    def prefix(self, value):
+    @property
+    def root_package(self):
+        return self._root_package
+
+    @root_package.setter
+    def root_package(self, value):
         if value is None:
             return
 
         valid = check_packages(value)
-        assert valid, f"{value} not a valid package name, please use only.-separated package names"
+        assert valid, f"{value} not a valid package name, please use only .-separated package names"
 
-        self._prefix = '/'.join(value.split('.')) + '/'
+        self._root_package = value
+
+    @property
+    def output_root(self):
+        return self._out_root
+
+    @output_root.setter
+    def output_root(self, value):
+        self._out_root = Path(value)
+
+    def _get_package(self, path):
+        relative_path = path.relative_to(self._roots[path])
+        package = self._PACKAGE.search(self._contents[path])
+        return self._fix_package(package) if package else '.'.join(relative_path.parts)
+
+    def _fix_package(self, match):
+        # replace first part of package with self._package
+        # applying fix_package multiple times is ok since it doesn't change the package
+        root_pkg, sub_pkgs = match.groups()
+        sub_pkgs = sub_pkgs[1:].split('.')  # skip first char, since it's a dot anyways
+        pkg_iterator = dropwhile(lambda p: p in self._root_package, chain([root_pkg], sub_pkgs))
+        return '.'.join(chain([self._root_package], pkg_iterator))
+
+    def _fix_package_declaration(self,  match):
+        return f"package {self._fix_package(match)};"
+
+    @property
+    def calculated_packages(self):
+        return {p: self._get_package(p) for p in self._contents}
+
+    def _fix_import(self, root: Path, match):
+        path, file = match.groups()
+        import_package = self.calculated_packages.get(root / path / file)
+        return '/'.join(chain(import_package.split('.'), [file])) if import_package else None
+
+    def _fix_import_declaration(self, root, match):
+        return f'import "{self._fix_import(root, match)}";'
+
+    def fix_imports(self):
+        process_imports = {p: {statement: self._fix_import(self._roots[p], statement)}
+                           for p, content in self._contents.items()
+                           for statement in self._IMPORT.finditer(content)}
+
+        failed = {p: imports for p, imports in process_imports.items() if any(v is None for v in imports.values())}
+
+        if any(failed):
+            warn('\n'.join("Can't resolve imports {imports} from file {path}".format(
+                path=path, imports=[k.group(0) for k, v in imports.items() if v is None]
+            ) for path, imports in failed.items()) +
+                 " Make sure the respective files are also included for rewriting")
+            return self
+
+        self._contents = {f: self._IMPORT.sub(partial(self._fix_import_declaration, self._roots[f]), content)
+                          for f, content in self._contents.items()}
         return self
 
-    def output_dir(self, path):
-        self._outdir = Path(path)
+    def fix_packages(self):
+        package_declarations = chain.from_iterable(self._PACKAGE.finditer(content) for content in self._contents.values())
+        for declared_package in package_declarations:
+            root_package = declared_package[1]
+            sub_packages = declared_package[2].replace('.', r'\.') if declared_package[2] else ""
+            package_regex = re.compile("({})({})".format(root_package, sub_packages))
+            self._contents = {f: package_regex.sub(self._fix_package, content) for f, content in self._contents.items()}
+
         return self
 
-    def _replace(self, match):
-        return self.IMPORT.sub(r'\1{pre}\2\3'.format(pre=self._prefix), ''.join(match.groups()))
+    def write(self, dry_run=True):
+        if dry_run:
+            return
 
-    def replace(self, dry_run=False):
-        for f in self.contents:
-            self.contents[f] = self.IMPORT.sub(self._replace, self.contents[f])
-            if dry_run:
-                continue
 
-            if self._outdir:
-                output = self._outdir / self._prefix / f.relative_to(self.parents[f])
-            else:
-                output = f
+        for file, content in self._contents.items():
+            out_dir = self.output_root / '/'.join(self._get_package(file).split('.'))
+            out_dir.mkdir(parents=True, exist_ok=True)
 
-            output.parent.mkdir(parents=True, exist_ok=True)
-
-            with output.open('w', encoding='utf-8') as stream:
-                stream.write(self.contents[f])
+            with open(out_dir / file.name, 'w') as output:
+                output.write(content)
 
 
 def check_fire():
