@@ -19,7 +19,6 @@ import distutils.log
 import os.path as op
 from distutils.errors import DistutilsOptionError
 from abc import ABC
-from warnings import warn
 from pathlib import Path
 from distutils.command.build_py import build_py
 from distutils.cmd import Command
@@ -153,9 +152,10 @@ class CompileProto(PathCommand):
     description = "compile protobuf files with [all] available python plugins"
 
     user_options = [
-        ('include-proto=', None, 'root dir for proto files'),
-        ('proto-package=', None, 'parent package that will be enforced for protobuf modules'),
+        ('include-proto', None, 'root dir for proto files'),
+        ('proto-package', None, 'parent package that will be enforced for protobuf modules'),
         ('build-lib', None, 'output directory for protobuf library'),
+        ('exclude', None, 'exclude compile options [python, mypy, better, plus], e.g. used to skip basic compilation'),
         ('dry-run', None, 'don\'t do anything but show protoc commands')
     ]
 
@@ -163,6 +163,7 @@ class CompileProto(PathCommand):
         self.include_proto = None
         self.proto_package = None
         self.build_lib = None
+        self.exclude = None
         self.dry_run = None
 
     def finalize_options(self) -> None:
@@ -173,6 +174,9 @@ class CompileProto(PathCommand):
 
         self.ensure_path_list('include_proto')
         self.ensure_string('proto_package')
+        self.ensure_string_list('exclude')
+        if self.exclude is None:
+            self.exclude = []
 
         if self.include_proto:
             self.announce(f"Including *.proto files from path[s] {self.include_proto}", distutils.log.INFO)
@@ -187,21 +191,28 @@ class CompileProto(PathCommand):
         self.announce(f"built protobuf packages: {compiled_packages}", distutils.log.INFO)
         missing = [p for p in compiled_packages or () if p not in self.distribution.packages]
         if missing:
-            warn(f"protobuf packages {', '.join(missing)} are missing "
-                 f"from setup.cfg / setup.py, but have been compiled.")
+            distutils.log.warn(f"protobuf packages {', '.join(missing)} are missing "
+                               f"from setup.cfg / setup.py, but have been compiled.")
             self.distribution.packages += missing
 
+    def mypy_rule(self):
+        return has_module('mypy', 'mypy_protobuf') and 'mypy' not in self.exclude
 
-    has_mypy = has_module('mypy', 'mypy_protobuf')
-    has_betterproto = has_module('betterproto')
-    has_proto_plus = has_module('codestare.proto')
+    def better_proto_rule(self):
+        return has_module('betterproto') and 'better' not in self.exclude
+
+    def proto_plus_rule(self):
+        return has_module('codestare.proto') and 'plus' not in self.exclude
+
+    def basic_python_rule(self):
+        return 'python' not in self.exclude
 
     sub_commands = [
         ('rewrite_proto', lambda self: self.proto_package is not None),
-        ('compile_python', None),
-        ('compile_betterproto', has_betterproto),
-        ('compile_mypy', has_mypy),
-        ('compile_protoplus', has_proto_plus),
+        ('compile_python', basic_python_rule),
+        ('compile_betterproto', better_proto_rule),
+        ('compile_mypy', mypy_rule),
+        ('compile_protoplus', proto_plus_rule),
     ]
 
 

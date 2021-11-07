@@ -3,14 +3,12 @@ from itertools import chain
 
 
 def has_module(*modules):
-    def inner(*args):
-        try:
-            for name in modules:
-                importlib.import_module(name)
-        except ImportError:
-            return False
-        return True
-    return inner
+    try:
+        for name in modules:
+            importlib.import_module(name)
+    except ImportError:
+        return False
+    return True
 
 
 def find_proto_files(*paths, recursive=True):
