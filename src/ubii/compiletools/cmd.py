@@ -140,6 +140,14 @@ class CompileBetterproto(CompileBase):
         super().initialize_options()
         self.options = 'better'
 
+class CompileProtoPlus(CompileBase):
+    description = "compile alternative python protobuf modules (protoplus plugin)"
+    user_options = CompileBase.user_options[:-1]
+
+    def initialize_options(self) -> None:
+        super().initialize_options()
+        self.options = 'plus'
+
 
 class CompileProto(PathCommand):
     description = "compile protobuf files with [all] available python plugins"
@@ -186,12 +194,14 @@ class CompileProto(PathCommand):
 
     has_mypy = has_module('mypy', 'mypy_protobuf')
     has_betterproto = has_module('betterproto')
+    has_proto_plus = has_module('codestare.proto')
 
     sub_commands = [
         ('rewrite_proto', lambda self: self.proto_package is not None),
         ('compile_python', None),
         ('compile_betterproto', has_betterproto),
         ('compile_mypy', has_mypy),
+        ('compile_protoplus', has_proto_plus),
     ]
 
 

@@ -17,10 +17,11 @@ class CompileOption(Flag):
     CPP = auto()
     PYTHON_BETTER_PROTO = auto()
     PYTHON_MYPY = auto()
-    PYTHON = auto()
+    PYTHON_PROTOPLUS = auto()
+    PYTHON_BASIC = auto()
     JAVASCRIPT = JSINDIVIDUAL | JSLIBRARY
-    PYTHON_COMBINED = PYTHON_MYPY | PYTHON_BETTER_PROTO | PYTHON
-    ALL = PYTHON | JAVA | JSINDIVIDUAL | JSLIBRARY | CSHARP | CPP | PYTHON_MYPY | PYTHON_BETTER_PROTO
+    PYTHON = PYTHON_MYPY | PYTHON_BETTER_PROTO | PYTHON_PROTOPLUS | PYTHON_BASIC
+    ALL = JAVA | JAVASCRIPT | CSHARP | CPP | PYTHON
 
     @property
     def protoc_plugin_name(self):
@@ -31,7 +32,8 @@ class CompileOption(Flag):
         if self == self.CPP: return 'cpp'
         if self == self.PYTHON_BETTER_PROTO: return 'python_betterproto'
         if self == self.PYTHON_MYPY: return 'mypy'
-        if self == self.PYTHON: return 'python'
+        if self == self.PYTHON_BASIC: return 'python'
+        if self == self.PYTHON_PROTOPLUS: return 'proto-plus'
         # combined options don't have plugins
 
     @classmethod
@@ -58,7 +60,8 @@ class CompileOption(Flag):
         if self & self.CPP: arguments += ['cpp']
         if self & self.PYTHON_MYPY: arguments += ['mypy']
         if self & self.PYTHON_BETTER_PROTO: arguments += ['better']
-        if self & self.PYTHON: arguments += ['py']
+        if self & self.PYTHON_PROTOPLUS: arguments += ['plus']
+        if self & self.PYTHON_BASIC: arguments += ['py']
         # other options have no associated arguments
 
         # combined options with special arguments:
@@ -100,6 +103,8 @@ class CompileOption(Flag):
 
         if self == self.PYTHON_BETTER_PROTO: return 'python with `better_proto` plugin'
         if self == self.PYTHON_MYPY: return 'mypy python stubs'
+        if self == self.PYTHON_MYPY: return 'python with `proto-plus` plugin'
+        if self == self.PYTHON_BASIC: return 'python'
         if self == self.JSLIBRARY: return 'javascript as library'
         if self == self.JSINDIVIDUAL: return 'javascript individual'
         # other options can just use the name

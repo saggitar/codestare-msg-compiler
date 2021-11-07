@@ -1,9 +1,8 @@
 import distutils.log
 import os
-import pathlib
 import re
 import subprocess
-from itertools import chain, dropwhile, islice, takewhile
+from itertools import chain, dropwhile
 
 import sys
 from functools import partial
@@ -218,7 +217,6 @@ class Rewriter:
     def write(self, dry_run=True):
         if dry_run:
             return
-
 
         for file, content in self._contents.items():
             out_dir = self.output_root / '/'.join(self._get_package(file).split('.'))
