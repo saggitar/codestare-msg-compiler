@@ -20,7 +20,7 @@ import os.path as op
 from distutils.errors import DistutilsOptionError
 from abc import ABC
 from pathlib import Path
-from distutils.command.build_py import build_py
+from setuptools.command.build_py import build_py
 from distutils.cmd import Command
 from itertools import chain
 from typing import List, Optional
@@ -328,7 +328,11 @@ class GenerateInits(PathCommand):
 
 
 class UbiiBuildPy(build_py):
-    user_options = build_py.user_options + CompileProto.user_options
+    def __getattr__(self, item):
+        if item == 'user_options':
+            return build_py.user_options + CompileProto.user_options
+        
+        return build_py.__getattr__(self, item)
 
     def initialize_options(self) -> None:
         super().initialize_options()
