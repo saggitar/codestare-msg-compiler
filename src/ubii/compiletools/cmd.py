@@ -188,6 +188,8 @@ class CompileProto(PathCommand):
 
         if self.include_proto:
             self.announce(f"Including *.proto files from path[s] {self.include_proto}", distutils.log.INFO)
+        else:
+            self.announce(f"No *.proto files specified, not compiling.", distutils.log.INFO)
 
     def run(self):
         for command in self.get_sub_commands():
@@ -204,19 +206,27 @@ class CompileProto(PathCommand):
             self.distribution.packages += missing
 
     def mypy_rule(self):
-        return has_module('mypy', 'mypy_protobuf') and 'mypy' not in self.exclude
+        return (has_module('mypy', 'mypy_protobuf')
+                and 'mypy' not in self.exclude
+                and self.include_proto)
 
     def better_proto_rule(self):
-        return has_module('betterproto') and 'better' not in self.exclude
+        return (has_module('betterproto')
+                and 'better' not in self.exclude
+                and self.include_proto)
 
     def proto_plus_rule(self):
-        return has_module('codestare.proto') and 'plus' not in self.exclude
+        return (has_module('codestare.proto')
+                and 'plus' not in self.exclude
+                and self.include_proto)
 
     def basic_python_rule(self):
-        return 'python' not in self.exclude
+        return ('python' not in self.exclude
+                and self.include_proto)
 
     def rewrite_rule(self):
-        return self.proto_package is not None
+        return (self.proto_package is not None
+                and self.include_proto)
 
     sub_commands = [
         ('rewrite_proto', rewrite_rule),
@@ -331,7 +341,7 @@ class UbiiBuildPy(build_py):
     def __getattr__(self, item):
         if item == 'user_options':
             return build_py.user_options + CompileProto.user_options
-        
+
         return build_py.__getattr__(self, item)
 
     def initialize_options(self) -> None:
@@ -359,5 +369,5 @@ class UbiiBuildPy(build_py):
         return bool(self.include_proto)
 
     sub_commands = [
-        ('compile_proto', compile_rule),
+        ('compile_proto', None),
     ]
