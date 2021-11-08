@@ -139,6 +139,10 @@ class CompileBetterproto(CompileBase):
         super().initialize_options()
         self.options = 'better'
 
+    sub_commands = [
+        ('generate_inits', None)
+    ]
+
 class CompileProtoPlus(CompileBase):
     description = "compile alternative python protobuf modules (protoplus plugin)"
     user_options = CompileBase.user_options[:-1]
@@ -146,6 +150,10 @@ class CompileProtoPlus(CompileBase):
     def initialize_options(self) -> None:
         super().initialize_options()
         self.options = 'plus'
+
+    sub_commands = [
+        ('generate_inits', None)
+    ]
 
 
 class CompileProto(PathCommand):
@@ -207,8 +215,11 @@ class CompileProto(PathCommand):
     def basic_python_rule(self):
         return 'python' not in self.exclude
 
+    def rewrite_rule(self):
+        return self.proto_package is not None
+
     sub_commands = [
-        ('rewrite_proto', lambda self: self.proto_package is not None),
+        ('rewrite_proto', rewrite_rule),
         ('compile_python', basic_python_rule),
         ('compile_betterproto', better_proto_rule),
         ('compile_mypy', mypy_rule),
@@ -340,6 +351,9 @@ class UbiiBuildPy(build_py):
 
         super().run()
 
+    def compile_rule(self):
+        return bool(self.include_proto)
+
     sub_commands = [
-        ('compile_proto', None),
+        ('compile_proto', compile_rule),
     ]
