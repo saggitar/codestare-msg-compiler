@@ -77,6 +77,9 @@ class CompileBase(PathCommand):
         args = {k: v for k, v in vars(self).items() if k in ['options', 'output', 'includes']}
         compiler.compile(*self.files, **args)
 
+        for command in self.get_sub_commands():
+            self.run_command(command)
+
     def finalize_options(self) -> None:
         self.set_undefined_options('rewrite_proto',
                                    ('outputs', 'includes'))
@@ -113,14 +116,10 @@ class CompileProtoPython(CompileBase):
         super().initialize_options()
         self.options = 'py'
 
-    def run(self):
-        super().run()
-        for command in self.get_sub_commands():
-            self.run_command(command)
-
     sub_commands = [
         ('generate_inits', None)
     ]
+
 
 class CompileProtoMypy(CompileBase):
     description = "compile stub files for python protobuf modules (mypy plugin)"
@@ -142,6 +141,7 @@ class CompileBetterproto(CompileBase):
     sub_commands = [
         ('generate_inits', None)
     ]
+
 
 class CompileProtoPlus(CompileBase):
     description = "compile alternative python protobuf modules (protoplus plugin)"
@@ -196,9 +196,12 @@ class CompileProto(PathCommand):
             self.run_command(command)
 
         proto_package_path = self.proto_package.split('.') if self.proto_package else ()
-        compiled_packages = ['.'.join([self.proto_package, p]) for p in setuptools.find_packages(op.join(self.build_lib,
-                                                                                               *proto_package_path))]
-        self.announce(f"built protobuf packages: {compiled_packages}", distutils.log.INFO)
+        compiled_packages = ['.'.join([self.proto_package, p])
+                             for p in setuptools.find_packages(op.join(self.build_lib, *proto_package_path))]
+
+        if compiled_packages:
+            self.announce(f"built protobuf packages: {compiled_packages}", distutils.log.INFO)
+
         missing = [p for p in compiled_packages or () if p not in self.distribution.packages]
         if missing:
             distutils.log.warn(f"protobuf packages {', '.join(missing)} are missing "
