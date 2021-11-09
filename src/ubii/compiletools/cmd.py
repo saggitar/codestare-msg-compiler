@@ -374,3 +374,11 @@ class UbiiBuildPy(build_py):
     sub_commands = [
         ('compile_proto', None),
     ]
+
+
+def write_package(cmd, basename, filename, force=False):
+    argname = os.path.splitext(basename)[0]
+    value = getattr(cmd.distribution, argname, None)
+    if value is not None:
+        value = '\n'.join(value) + '\n'
+    cmd.write_or_delete_file(argname, filename, value, force)
