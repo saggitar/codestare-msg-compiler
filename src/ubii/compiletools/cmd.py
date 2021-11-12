@@ -24,6 +24,7 @@ from setuptools.command.build_py import build_py
 from distutils.cmd import Command
 from itertools import chain
 from typing import List, Optional
+from importlib.resources import read_text
 
 from . import find_proto_files, has_module
 from .options import CompileOption
@@ -299,17 +300,17 @@ class GenerateInits(PathCommand):
         ('packages', None, 'generate for these packages only'),
         ('recursive', None, 'if set, you only need to specify parent packages, all subpackages will also be considered'),
         ('no-recursive', None, 'only the exact packages specified in `packages` are considered. [default]'),
-        ('use-wildcards', None, 'if set, init files will fildcard import everything from all submodules (experimental)'),
-        ('no-use-wildcards', None, 'if set init files will be empty'),
+        ('fancy-imports', None, 'if set, init files will lazily import everything from all submodules (experimental)'),
+        ('no-fancy-imports', None, 'if set init files will be empty [default]'),
     ]
 
-    boolean_options = ['recursive', 'use-wildcards']
+    boolean_options = ['recursive', 'fancy-imports']
     negative_opt = {'no-recursive': 'recursive',
-                    'no-use-wildcards': 'use-wildcards'}
+                    'no-fancy-imports': 'fancy-imports'}
 
     def initialize_options(self) -> None:
         self.recursive = 0
-        self.use_wildcards = 0
+        self.fancy_imports = 0
         self.package_root = None
         self.packages = None
 
@@ -325,16 +326,20 @@ class GenerateInits(PathCommand):
         Generate recursive init files with wildcard imports for a package.
         """
 
-        search_dirs = [Path(self.package_root) / op.join(*package.split('.')) for package in self.packages or ()]
-        searches = [p.glob(f"{'**' if self.recursive else '*'}/") for p in search_dirs]
+        search_dirs = (
+            Path(self.package_root) / op.join(*package.split('.'))
+            for package in self.packages or ()
+        )
+
+        searches = (
+            p.glob(f"{'**' if self.recursive else '*'}/")
+            for p in search_dirs
+        )
 
         for package in chain(*searches):
-            package = Path(package)
-            modules = (p.stem for p in package.glob('*.py') if not p.stem.startswith('_'))
-            packages = (p.stem for p in package.glob('*') if not p.stem.startswith('_') and p.is_dir())
-            with (package / '__init__.py').open('w') as f:
-                if self.use_wildcards:
-                    f.write('\n'.join(f"from .{s} import *" for s in chain(modules, packages)))
+            with (package / '__init__.py').open('w', encoding='utf-8') as f:
+                if self.fancy_imports:
+                    f.write(read_text(__package__, 'init_template'))
 
         self.announce(f"Generated __init__.py files for "
                       f"python packages {self.packages}{' recursively' if self.recursive else ''}", distutils.log.INFO)
@@ -374,3 +379,9 @@ class UbiiBuildPy(build_py):
     sub_commands = [
         ('compile_proto', None),
     ]
+
+
+def write_package(cmd: Command, basename, filename, force=False):
+    compile_command = cmd.get_finalized_command('compile_proto')
+    value = getattr(compile_command, 'proto_package', None)
+    cmd.write_or_delete_file('proto package name', filename, value, force)
