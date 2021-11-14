@@ -1,6 +1,7 @@
 import operator
 from enum import Flag, auto
 from functools import reduce
+from itertools import chain
 from typing import List, Union
 
 CompileOptionStr = Union['Compiler.CompileOption', str]
@@ -49,6 +50,7 @@ class CompileOption(Flag):
     def from_string_list(cls, values):
         return reduce(operator.and_, [cls.from_str(v) for v in values])
 
+
     @property
     def arguments(self) -> List:
         """
@@ -80,22 +82,38 @@ class CompileOption(Flag):
     def disjunct(self) -> List['CompileOption']:
         """
         Return all options which are not combinations of other options
+        """
+        return [o for o in type(self) if o & self and not o.is_composite]
+
+    @property
+    def is_composite(self):
+        """
         Like normal integer flags, individual flags are all powers of 2,
         see https://docs.python.org/3/library/enum.html#flag
         combined flags are not, so we test that with `o.value & (o.value - 1)`
         """
-        return [o for o in type(self) if o & self and not o.value & (o.value - 1)]
+        return self.value & (self.value - 1)
 
-    @property
-    def output_dir(self):
-        """
-        Return format string. Format with option.output_dir.format(root=you_root_directory)
-        """
-        if self == self.JSLIBRARY: return f'library=protobuf_library,binary:{self.JAVASCRIPT.output_dir}'
-        if self == self.JSINDIVIDUAL: return f'import_style=commonjs,binary:{self.JAVASCRIPT.output_dir}'
 
-        return "{root}"
-        # output dirs only make sense for individual options. not combined ones.
+    def parameters(self, *args, **kwargs):
+        """
+        some options can use request parameters for the plugin, this is actually also
+        how the javascript "library / binary" stuff is implemented
+        """
+        args = set(args)
+
+        if self.is_composite:
+            raise ValueError("parameters only make sense for individual options.")
+
+        if self == self.JSLIBRARY:
+            kwargs['library'] = 'protobuf_library'
+            args.add('binary')
+
+        if self == self.JSINDIVIDUAL:
+            kwargs['import_style'] = 'commonjs'
+            args.add('binary')
+
+        return ','.join(chain((f'{k}={v}' for k, v in kwargs.items()), args))
 
     def __str__(self):
         if len(self.disjunct) > 1:

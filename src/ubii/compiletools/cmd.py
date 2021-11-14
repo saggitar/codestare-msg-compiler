@@ -11,8 +11,14 @@ This would break the support for build tools like cmake / make and so on, so it'
 this way in the official plugin.
 
 """
+import contextlib
+import filecmp
 import fnmatch
 import re
+import sys
+import tempfile
+from functools import wraps
+
 import setuptools
 import os
 import distutils.log
@@ -25,12 +31,33 @@ from distutils.cmd import Command
 from itertools import chain
 from typing import List, Optional
 from importlib.resources import read_text
+from setuptools.command.egg_info import egg_info
 
 from . import find_proto_files, has_module
 from .options import CompileOption
 from .compile import Compiler, Rewriter
 
 PathList = Optional[List[Path]]
+
+
+@contextlib.contextmanager
+def compare_files():
+    import distutils.file_util as fu
+    orig = fu.copy_file
+
+    @wraps(orig)
+    def wrapper(src, dst, *args, verbose=1, **kwargs):
+        if Path(dst).exists() and filecmp.cmp(src, dst):
+            if verbose >= 1:
+                distutils.log.debug("not copying %s (output up-to-date)", src)
+            return dst, 0
+
+        return orig(src, dst, *args, verbose=verbose, **kwargs)
+
+    fu.copy_file = wrapper
+    yield
+    fu.copy_file = orig
+
 
 
 class PathCommand(Command, ABC):
@@ -67,16 +94,38 @@ class CompileBase(PathCommand):
         ('protoc=', None, 'protoc compiler location'),
         ('output=', None, 'Output directory for compiled files'),
         ('includes=', None, 'Include directories for .proto files'),
+        ('force', 'f', "forcibly build everything (ignore file timestamps)"),
         ('files=', None, 'Protobuf source files to compile'),
         ('options=', 'o', f"Options for compilation, possible values are "
                           f"{CompileOption.ALL.disjunct}"
                           f" (default)")
     ]
 
+    @contextlib.contextmanager
+    def redirect_build_dir(self):
+        original = self.output
+        tf = None
+        if not self.force:
+            tf = tempfile.TemporaryDirectory(suffix=sys.executable.replace(os.sep, '_'),
+                                             prefix=__name__.replace('.', '_'))
+            self.output = tf.name
+
+        yield original, self.output
+        if tf is not None:
+            tf.cleanup()
+
+        self.output = original
+
     def run(self):
         compiler = Compiler(protoc=self.protoc)
-        args = {k: v for k, v in vars(self).items() if k in ['options', 'output', 'includes']}
-        compiler.compile(*self.files, **args)
+
+        with self.redirect_build_dir() as (old, temp):
+            args = {k: v for k, v in vars(self).items() if k in ['options', 'output', 'includes']}
+            args['quiet'] = not self.distribution.verbose
+            compiler.compile(*self.files, **args)
+
+            with compare_files():
+                self.copy_tree(temp, old)
 
         for command in self.get_sub_commands():
             self.run_command(command)
@@ -87,6 +136,7 @@ class CompileBase(PathCommand):
 
         self.set_undefined_options('compile_proto',
                                    ('build_lib', 'output'),
+                                   ('force', 'force'),
                                    ('dry_run', 'dry_run')
                                    )
 
@@ -107,6 +157,7 @@ class CompileBase(PathCommand):
         self.files: PathList = None
         self.dry_run = None
         self.options = None
+        self.force = None
 
 
 class CompileProtoPython(CompileBase):
@@ -165,20 +216,24 @@ class CompileProto(PathCommand):
         ('proto-package', None, 'parent package that will be enforced for protobuf modules'),
         ('build-lib', None, 'output directory for protobuf library'),
         ('exclude', None, 'exclude compile options [python, mypy, better, plus], e.g. used to skip basic compilation'),
+        ('force', 'f', "forcibly build everything (ignore file timestamps)"),
         ('dry-run', None, 'don\'t do anything but show protoc commands')
     ]
+
 
     def initialize_options(self) -> None:
         self.include_proto = None
         self.proto_package = None
         self.build_lib = None
         self.exclude = None
+        self.force = None
         self.dry_run = None
 
     def finalize_options(self) -> None:
         self.set_undefined_options('build_py',
                                    ('build_lib', 'build_lib'),
                                    ('dry_run', 'dry_run'),
+                                   ('force', 'force'),
                                    ('include_proto', 'include_proto'))
 
         self.ensure_path_list('include_proto')
@@ -195,6 +250,7 @@ class CompileProto(PathCommand):
     def run(self):
         for command in self.get_sub_commands():
             self.run_command(command)
+
 
         proto_package_path = self.proto_package.split('.') if self.proto_package else ()
         compiled_packages = ['.'.join([self.proto_package, p])
@@ -313,9 +369,11 @@ class GenerateInits(PathCommand):
         self.fancy_imports = 0
         self.package_root = None
         self.packages = None
+        self.force = None
 
     def finalize_options(self) -> None:
         self.set_undefined_options('compile_python',
+                                   ('force', 'force'),
                                    ('output', 'package_root'))
 
         self.ensure_string_list('packages')
@@ -336,13 +394,28 @@ class GenerateInits(PathCommand):
             for p in search_dirs
         )
 
+        skipped = []
+
         for package in chain(*searches):
-            with (package / '__init__.py').open('w', encoding='utf-8') as f:
+            init: Path = package / '__init__.py'
+            if init.exists() and not self.force:
+                skipped += ['.'.join((package.relative_to(self.package_root)).parts)]
+                distutils.log.debug(f"Not generating {init}, already existing. Use --force")
+                continue
+
+            with init.open('w', encoding='utf-8') as f:
                 if self.fancy_imports:
                     f.write(read_text(__package__, 'init_template'))
 
-        self.announce(f"Generated __init__.py files for "
-                      f"python packages {self.packages}{' recursively' if self.recursive else ''}", distutils.log.INFO)
+        created = [p for p in self.packages if p not in skipped]
+        if created:
+            self.announce(f"Generated __init__.py files for "
+                          f"python packages {created}"
+                          f"{' recursively' if self.recursive else ''}", distutils.log.INFO)
+        elif self.packages:
+            self.announce(f"__init__.py files in {self.packages} already present, not generated", distutils.log.INFO)
+        else:
+            self.announce(f"No packages found to generate init files for.", distutils.log.WARN)
 
 
 class UbiiBuildPy(build_py):
@@ -381,7 +454,7 @@ class UbiiBuildPy(build_py):
     ]
 
 
-def write_package(cmd: Command, basename, filename, force=False):
+def write_package(cmd: egg_info, basename, filename, force=False):
     compile_command = cmd.get_finalized_command('compile_proto')
     value = getattr(compile_command, 'proto_package', None)
     cmd.write_or_delete_file('proto package name', filename, value, force)
