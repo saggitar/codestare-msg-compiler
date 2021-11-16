@@ -91,13 +91,12 @@ class Compiler:
                 output=os.getcwd(),
                 **kwargs) -> Optional[str]:
         """
-        Compile for given options, see compile-proto compile --help
+        Compile for given options, see compile-proto compile -- --help
 
         :param quiet: Don't print output from protoc plugin if possible
         :param output: output directory (default: working directory)
         :param options: one or multiple options see `compile-proto OPTIONS` default: [py]
         :param protoc_files: files to compile, passed through to protoc
-        :param force: if True compile directly to output directory. If false, use tempdir and check for overwrites
         :param kwargs: Passed to protoc invocation, see compile-proto call -- --help.
         :return: the output path
         """
@@ -106,11 +105,12 @@ class Compiler:
             return
 
         for option in CompileOption.from_string_list(options).disjunct:
-            params = option.parameters('quiet') if quiet else ''
+            params = ('quiet',) if quiet else ()
 
             protoc_args = {
-                f'{option.protoc_plugin_name}_out': ':'.join(filter(None, (params, output)))
+                f'{option.protoc_plugin_name}_out': option.format_out(output, *params)
             }
+
             distutils.log.info(f"Compiling with {protoc_args}")
             self.call(*protoc_files, **kwargs, **protoc_args)
 

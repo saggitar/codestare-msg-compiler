@@ -50,7 +50,6 @@ class CompileOption(Flag):
     def from_string_list(cls, values):
         return reduce(operator.and_, [cls.from_str(v) for v in values])
 
-
     @property
     def arguments(self) -> List:
         """
@@ -74,6 +73,9 @@ class CompileOption(Flag):
 
         return arguments
 
+    def format_out(self, output, *params, **kw_params):
+        return ':'.join(filter(None, (self.parameters(*params, **kw_params), output)))
+
     @property
     def formatted_argument(self):
         return f"[{','.join(self.arguments)}] {self}" if len(self.arguments) == 1 else None
@@ -93,7 +95,6 @@ class CompileOption(Flag):
         combined flags are not, so we test that with `o.value & (o.value - 1)`
         """
         return self.value & (self.value - 1)
-
 
     def parameters(self, *args, **kwargs):
         """
