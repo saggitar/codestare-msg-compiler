@@ -216,11 +216,19 @@ class CompileProtoPlus(CompileBase):
 class CompileProto(PathCommand):
     description = "compile protobuf files with [all] available python plugins"
 
+    class Flavor(Enum):
+        MYPY = 'mypy'
+        BASIC = 'python'
+        BETTER = 'better'
+        PLUS = 'plus'
+
+    flavors = {s.value: s for s in Flavor}
+
     user_options = [
         ('include-proto', None, 'root dir for proto files'),
         ('proto-package', None, 'parent package that will be enforced for protobuf modules'),
         ('build-lib', None, 'output directory for protobuf library'),
-        ('exclude', None, 'exclude compile options [python, mypy, better, plus], e.g. used to skip basic compilation'),
+        ('flavor', None, f'flavor of compiled code, one of {",".join(flavors)}'),
         ('force', 'f', "forcibly build everything (ignore file timestamps)"),
         ('dry-run', None, 'don\'t do anything but show protoc commands')
     ]
@@ -229,7 +237,7 @@ class CompileProto(PathCommand):
         self.include_proto = None
         self.proto_package = None
         self.build_lib = None
-        self.exclude = None
+        self.flavor = None
         self.force = None
         self.dry_run = None
 
@@ -243,8 +251,11 @@ class CompileProto(PathCommand):
         self.ensure_path_list('include_proto')
         self.ensure_string('proto_package')
         self.ensure_string_list('exclude')
-        if self.exclude is None:
-            self.exclude = []
+        self.ensure_string('flavor')
+        if self.flavor is not None:
+            if self.flavor not in self.flavors:
+                raise DistutilsOptionError(f"Only possible options for flavor are {','.join(self.flavors)}")
+            self.flavor = self.flavors[self.flavor]
 
         if self.include_proto:
             self.announce(f"Including *.proto files from path[s] {self.include_proto}", distutils.log.INFO)
@@ -271,21 +282,21 @@ class CompileProto(PathCommand):
 
     def mypy_rule(self):
         return (has_module('mypy', 'mypy_protobuf')
-                and 'mypy' not in self.exclude
+                and self.flavor == self.Flavor.MYPY
                 and self.include_proto)
 
     def better_proto_rule(self):
         return (has_module('betterproto')
-                and 'better' not in self.exclude
+                and self.flavor == self.Flavor.BETTER
                 and self.include_proto)
 
     def proto_plus_rule(self):
         return (has_module('codestare.proto')
-                and 'plus' not in self.exclude
+                and self.flavor == self.Flavor.PLUS
                 and self.include_proto)
 
     def basic_python_rule(self):
-        return ('python' not in self.exclude
+        return (self.flavor == self.Flavor.BASIC
                 and self.include_proto)
 
     def rewrite_rule(self):
