@@ -17,6 +17,7 @@ import fnmatch
 import re
 import sys
 import tempfile
+from enum import Enum
 from functools import wraps
 
 import setuptools
@@ -32,6 +33,7 @@ from itertools import chain
 from typing import List, Optional
 from importlib.resources import read_text
 from setuptools.command.egg_info import egg_info
+from setuptools.config import ConfigHandler
 
 from . import find_proto_files, has_module
 from .options import CompileOption
@@ -57,7 +59,6 @@ def compare_files():
     fu.copy_file = wrapper
     yield
     fu.copy_file = orig
-
 
 
 class PathCommand(Command, ABC):
@@ -96,6 +97,7 @@ class CompileBase(PathCommand):
         ('includes=', None, 'Include directories for .proto files'),
         ('force', 'f', "forcibly build everything (ignore file timestamps)"),
         ('files=', None, 'Protobuf source files to compile'),
+        ('plugin_params=', None, 'parameters passed to protoc plugin'),
         ('options=', 'o', f"Options for compilation, possible values are "
                           f"{CompileOption.ALL.disjunct}"
                           f" (default)")
@@ -120,7 +122,7 @@ class CompileBase(PathCommand):
         compiler = Compiler(protoc=self.protoc)
 
         with self.redirect_build_dir() as (old, temp):
-            args = {k: v for k, v in vars(self).items() if k in ['options', 'output', 'includes']}
+            args = {k: v for k, v in vars(self).items() if k in ['options', 'output', 'includes', 'plugin_params']}
             args['quiet'] = not self.distribution.verbose
             compiler.compile(*self.files, **args)
 
@@ -129,6 +131,7 @@ class CompileBase(PathCommand):
 
         for command in self.get_sub_commands():
             self.run_command(command)
+
 
     def finalize_options(self) -> None:
         self.set_undefined_options('rewrite_proto',
@@ -144,6 +147,7 @@ class CompileBase(PathCommand):
         self.ensure_dir_list('includes')
         self.ensure_string_list('options')
         self.ensure_filename('protoc')
+        self.ensure_string('plugin_params')
 
         if self.files is not None:
             self.ensure_path_list('files')
@@ -158,6 +162,7 @@ class CompileBase(PathCommand):
         self.dry_run = None
         self.options = None
         self.force = None
+        self.plugin_params = None
 
 
 class CompileProtoPython(CompileBase):
@@ -219,7 +224,6 @@ class CompileProto(PathCommand):
         ('force', 'f', "forcibly build everything (ignore file timestamps)"),
         ('dry-run', None, 'don\'t do anything but show protoc commands')
     ]
-
 
     def initialize_options(self) -> None:
         self.include_proto = None
@@ -350,23 +354,27 @@ class RewriteProto(PathCommand):
 
 
 class GenerateInits(PathCommand):
+    class _Styles(Enum):
+        FANCY = 'fancy'
+        WILDCARD = 'wildcard'
+        EMPTY = 'empty'
+
+    styles = {s.value: s for s in _Styles}
     description = "generate (better) __init__.py files for protobuf modules"
 
     user_options = [
         ('packages', None, 'generate for these packages only'),
         ('recursive', None, 'if set, you only need to specify parent packages, all subpackages will also be considered'),
         ('no-recursive', None, 'only the exact packages specified in `packages` are considered. [default]'),
-        ('fancy-imports', None, 'if set, init files will lazily import everything from all submodules (experimental)'),
-        ('no-fancy-imports', None, 'if set init files will be empty [default]'),
+        ('import_style', None, f'One of: {", ".join(styles)}. See documentation for details about generated inits'),
     ]
 
-    boolean_options = ['recursive', 'fancy-imports']
-    negative_opt = {'no-recursive': 'recursive',
-                    'no-fancy-imports': 'fancy-imports'}
+    boolean_options = ['recursive']
+    negative_opt = {'no-recursive': 'recursive'}
 
     def initialize_options(self) -> None:
         self.recursive = 0
-        self.fancy_imports = 0
+        self.import_style = None
         self.package_root = None
         self.packages = None
         self.force = None
@@ -378,6 +386,12 @@ class GenerateInits(PathCommand):
 
         self.ensure_string_list('packages')
         self.ensure_dirname('package_root')
+        self.ensure_string('import_style')
+        if self.import_style is not None:
+            if self.import_style not in self.styles:
+                raise DistutilsOptionError(f"Only supported values for import_style are: {', '.join(self.styles)}")
+            else:
+                self.import_style = self.styles[self.import_style]
 
     def run(self) -> None:
         """
@@ -398,14 +412,20 @@ class GenerateInits(PathCommand):
 
         for package in chain(*searches):
             init: Path = package / '__init__.py'
+            name = '.'.join(package.relative_to(self.package_root).parts)
             if init.exists() and not self.force:
-                skipped += ['.'.join((package.relative_to(self.package_root)).parts)]
+                skipped += [name]
                 distutils.log.debug(f"Not generating {init}, already existing. Use --force")
                 continue
 
             with init.open('w', encoding='utf-8') as f:
-                if self.fancy_imports:
+                if self.import_style == self._Styles.FANCY:
                     f.write(read_text(__package__, 'init_template'))
+                if self.import_style == self._Styles.WILDCARD:
+                    modules = [p for p in init.parent.glob('*.py') if not p.name.startswith('_')]
+                    f.write('\n'.join(f"from .{m.stem} import *" for m in modules))
+                if self.import_style == self._Styles.EMPTY:
+                    pass
 
         created = [p for p in self.packages if p not in skipped]
         if created:

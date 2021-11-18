@@ -88,6 +88,7 @@ class Compiler:
     def compile(self, *protoc_files,
                 options=None,
                 quiet=False,
+                plugin_params: str = '',
                 output=os.getcwd(),
                 **kwargs) -> Optional[str]:
         """
@@ -97,15 +98,18 @@ class Compiler:
         :param output: output directory (default: working directory)
         :param options: one or multiple options see `compile-proto OPTIONS` default: [py]
         :param protoc_files: files to compile, passed through to protoc
+        :param plugin_params: mapping of additional parameters for the protoc plugin (not the compiler itself)
         :param kwargs: Passed to protoc invocation, see compile-proto call -- --help.
         :return: the output path
         """
+        params = (plugin_params, ) if plugin_params else ()
+
         if not options:
             warn("No options specified, no compilation will take place.")
             return
 
         for option in CompileOption.from_string_list(options).disjunct:
-            params = ('quiet',) if quiet else ()
+            params += ('quiet',) if quiet else ()
 
             protoc_args = {
                 f'{option.protoc_plugin_name}_out': option.format_out(output, *params)
