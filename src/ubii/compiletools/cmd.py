@@ -250,7 +250,6 @@ class CompileProto(PathCommand):
 
         self.ensure_path_list('include_proto')
         self.ensure_string('proto_package')
-        self.ensure_string_list('exclude')
         self.ensure_string('flavor')
         if self.flavor is not None:
             if self.flavor not in self.flavors:
