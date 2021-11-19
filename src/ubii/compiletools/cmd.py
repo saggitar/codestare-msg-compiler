@@ -132,7 +132,6 @@ class CompileBase(PathCommand):
         for command in self.get_sub_commands():
             self.run_command(command)
 
-
     def finalize_options(self) -> None:
         self.set_undefined_options('rewrite_proto',
                                    ('outputs', 'includes'))
@@ -242,7 +241,7 @@ class CompileProto(PathCommand):
         self.dry_run = None
 
     def finalize_options(self) -> None:
-        self.set_undefined_options('build_py',
+        self.set_undefined_options('build_py_proto',
                                    ('build_lib', 'build_lib'),
                                    ('dry_run', 'dry_run'),
                                    ('force', 'force'),
@@ -256,15 +255,14 @@ class CompileProto(PathCommand):
                 raise DistutilsOptionError(f"Only possible options for flavor are {','.join(self.flavors)}")
             self.flavor = self.flavors[self.flavor]
 
-        if self.include_proto:
+    def run(self):
+        if self.include_proto is not None:
             self.announce(f"Including *.proto files from path[s] {self.include_proto}", distutils.log.INFO)
         else:
             self.announce(f"No *.proto files specified, not compiling.", distutils.log.INFO)
 
-    def run(self):
         for command in self.get_sub_commands():
             self.run_command(command)
-
 
         proto_package_path = self.proto_package.split('.') if self.proto_package else ()
         compiled_packages = ['.'.join([self.proto_package, p])
@@ -345,6 +343,12 @@ class RewriteProto(PathCommand):
         self.ensure_dir_list('inputs')
         self.ensure_dir_list('outputs')
 
+        if self.inputs is None:
+            raise DistutilsOptionError(f"Can't rewrite proto files without inputs")
+
+        if self.outputs is None:
+            raise DistutilsOptionError(f"Can't rewrite proto files without outputs")
+
         if len(self.inputs) != len(self.outputs):
             raise DistutilsOptionError(f"can't rewrite proto files from {self.inputs}: "
                                        f"wrong number of outputs ({len(self.outputs)})")
@@ -397,6 +401,11 @@ class GenerateInits(PathCommand):
         self.ensure_string_list('packages')
         self.ensure_dirname('package_root')
         self.ensure_string('import_style')
+
+        if self.package_root is None:
+            raise DistutilsOptionError(f"Can't generate inits without "
+                                       f"package root (no output from `compile_python`?)")
+
         if self.import_style is not None:
             if self.import_style not in self.styles:
                 raise DistutilsOptionError(f"Only supported values for import_style are: {', '.join(self.styles)}")
@@ -407,6 +416,17 @@ class GenerateInits(PathCommand):
         """
         Generate recursive init files with wildcard imports for a package.
         """
+        def is_package(path: Path):
+            return path.is_dir() and list(path.glob('**/__init__.py'))
+
+        if self.packages is None:
+            root = Path(self.package_root)
+            available = (f"'{p.name}'" for p in filter(is_package, filter(Path.is_dir, root.glob('*'))))
+            self.announce(f"no packages specified -> skipping. "
+                          f"(possible packages found in {self.package_root}: "
+                          f"{', '.join(available) or 'No packages found'})", distutils.log.INFO)
+
+            return
 
         search_dirs = (
             Path(self.package_root) / op.join(*package.split('.'))
@@ -437,7 +457,7 @@ class GenerateInits(PathCommand):
                 if self.import_style == self._Styles.EMPTY:
                     pass
 
-        created = [p for p in self.packages if p not in skipped]
+        created = [p for p in self.packages or () if p not in skipped]
         if created:
             self.announce(f"Generated __init__.py files for "
                           f"python packages {created}"
@@ -445,7 +465,7 @@ class GenerateInits(PathCommand):
         elif self.packages:
             self.announce(f"__init__.py files in {self.packages} already present, not generated", distutils.log.INFO)
         else:
-            self.announce(f"No packages found to generate init files for.", distutils.log.WARN)
+            self.announce(f"No init files generated for {self.package_root}", distutils.log.INFO)
 
 
 class UbiiBuildPy(build_py):
@@ -486,5 +506,14 @@ class UbiiBuildPy(build_py):
 
 def write_package(cmd: egg_info, basename, filename, force=False):
     compile_command = cmd.get_finalized_command('compile_proto')
+    proto_plus_cmd = (cmd.get_finalized_command('compile_protoplus')
+                      if 'compile_protoplus' in compile_command.get_sub_commands()
+                      else None)
+
     value = getattr(compile_command, 'proto_package', None)
-    cmd.write_or_delete_file('proto package name', filename, value, force)
+    params = getattr(proto_plus_cmd, 'plugin_params', None)
+    if params is not None:
+        value = params.replace('package', value)
+
+    if value:
+        cmd.write_or_delete_file('proto package name', filename, value, force)
