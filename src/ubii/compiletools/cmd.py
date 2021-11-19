@@ -482,7 +482,7 @@ class UbiiBuildPy(build_py):
     def finalize_options(self) -> None:
         super().finalize_options()
 
-        if self.include_proto is None:
+        if self.include_proto == "included":
             # if .proto files are included in data files
             proto_dirs = [self.get_package_dir(package) for package, _, _, filenames in self.data_files
                           if any(re.match(fnmatch.translate('*.proto'), f) for f in filenames)]
