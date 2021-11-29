@@ -108,7 +108,9 @@ class CompileBase(PathCommand):
         original = self.output
         tf = None
         if not self.force:
-            tf = tempfile.TemporaryDirectory(suffix=sys.executable.replace(os.sep, '_'),
+            executable = Path(sys.executable)
+            suffix = '_'.join(p.replace('.', '_') for p in executable.parts if not p == executable.anchor)
+            tf = tempfile.TemporaryDirectory(suffix=suffix,
                                              prefix=__name__.replace('.', '_'))
             self.output = tf.name
 
