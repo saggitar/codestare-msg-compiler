@@ -140,18 +140,23 @@ class CompileBase(PathCommand):
 
         self.set_undefined_options('compile_proto',
                                    ('build_lib', 'output'),
+                                   ('include_proto', 'includes'),
+                                   ('proto_package', 'proto_package'),
                                    ('force', 'force'),
                                    ('dry_run', 'dry_run')
                                    )
 
-        self.ensure_dirname('output')
         self.ensure_dir_list('includes')
+        self.ensure_dirname('output')
         self.ensure_string_list('options')
         self.ensure_filename('protoc')
         self.ensure_string('plugin_params')
 
         if self.files is not None:
             self.ensure_path_list('files')
+        elif self.proto_package:
+            self.files = find_proto_files(*[include / '/'.join(self.proto_package.split('.'))
+                                            for include in self.includes])
         else:
             self.files = find_proto_files(*self.includes)
 
@@ -163,6 +168,7 @@ class CompileBase(PathCommand):
         self.dry_run = None
         self.options = None
         self.force = None
+        self.proto_package = None
         self.plugin_params = None
 
 
