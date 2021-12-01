@@ -116,7 +116,7 @@ class CompileOption(Flag):
 
         if self == self.PYTHON_PROTOPLUS:
             args.add('readable_imports')
-            kwargs['save_request'] = 'protoc_request.txt'
+            # kwargs['save_request'] = 'protoc_request.txt'
 
         return ','.join(chain((f'{k}={v}' for k, v in kwargs.items()), args))
 
