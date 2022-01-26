@@ -519,7 +519,7 @@ def write_package(cmd: egg_info, basename, filename, force=False):
                       else None)
 
     value = getattr(compile_command, 'proto_package', None)
-    params = getattr(proto_plus_cmd, 'plugin_params', None)
+    params = getattr(proto_plus_cmd, 'plugin_params', '')
     if 'package' in params:
         value = params[params.index('package'):].split(',')[0].replace('package', value)
 
