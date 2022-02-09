@@ -79,7 +79,6 @@ html_sidebars = {
 
 html_theme_options = {
     'description': metadata['Summary'],
-    'logo': 'logo.png',
     'github_user': 'saggitar',
     'github_repo': 'codestare-msg-compiler',
     'page_width': '75%'
