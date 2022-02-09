@@ -1,66 +1,76 @@
+"""
+Protoc compiler wrapper CLI (using `fire`_)
+
+.. _fire:
+    https://python-fire.readthedocs.io/en/latest/
+"""
+
 import distutils.log
+import distutils.spawn
+import functools
+import itertools
 import os
+import pathlib
 import re
 import subprocess
-import tempfile
-from itertools import chain, dropwhile
-
 import sys
-from functools import partial
-from warnings import warn
-from distutils.spawn import find_executable
-from pathlib import Path
+import warnings
 from typing import List, Optional, Dict
 
 from . import find_proto_files
 from .options import CompileOption
 
 package_regex = r'(\w+)((?:\.\w+)*)'
-check_packages = partial(re.match, package_regex)
+check_packages = functools.partial(re.match, package_regex)
 
 
 class Compiler:
     """
     Wrapper around protobuf compiler.
 
-    See compile-proto OPTIONS for all possible compilation options.
-    See compile-proto (no args) and compile-proto --help for more help
+    See ``compile-proto OPTIONS`` for all possible compilation options.
+    See ``compile-proto`` (no args) and ``compile-proto --help`` for more help
     """
 
     OPTIONS = [o.formatted_argument for o in CompileOption if o.formatted_argument]
+    """
+    Supported compile options, multiple options may be specified.
+    """
 
-    def __init__(self, protoc=find_executable('protoc')):
+    def __init__(self, protoc=distutils.spawn.find_executable('protoc')):
         self.protoc = protoc or self._find_protoc()
 
-    def _find_protoc(self):
+    def _find_protoc(self) -> Optional[str]:
         """
         Searches for a protoc executable respecting the PROTOC
         environment variable
 
-        :return: path to protoc executable or None
+        Returns:
+            path to protoc executable or None
         """
-        protoc = os.environ.get('PROTOC', find_executable('protoc'))
+        protoc = os.environ.get('PROTOC', distutils.spawn.find_executable('protoc'))
         if not protoc:
-            warn(f"protoc is not found in $PATH."
-                 " Please install it or set the PROTOC environment variable")
+            warnings.warn(f"protoc is not found in $PATH."
+                          " Please install it or set the PROTOC environment variable")
         return protoc
 
     def call(self, *proto_files,
-             includes: str=None,
+             includes: str = None,
              protohelp=False,
              dry_run=False,
              **options):
         """
         Just a wrapper around the `protoc` compiler.
 
-        See compile-proto call --help to print help of protoc command
-        See compile-proto call -- --help for additonal help with the call command
-        See compile-proto protoc for the path of the used protoc compiler executable
+        See ``compile-proto call --help`` to print help of protoc command
+        See ``compile-proto call -- --help`` for additonal help with the call command
+        See ``compile-proto protoc`` for the path of the used protoc compiler executable
 
-        :param includes: Directories to use as includes
-        :param protohelp: Use this flag to pass --help to protoc invocation
-        :param options: Will be passed as flags to the protoc command (only `--flag` syntax supported, no single dash)
-        :param dry_run: If True, don't do anything except printing the command
+        Args:
+            includes: Directories to use as includes
+            protohelp: Use this flag to pass ``--help`` to protoc invocation
+            options: Will be passed as flags to the protoc command (only ``--flag`` syntax supported, no single dash)
+            dry_run: If True, don't do anything except printing the command
         """
         if 'help' in options:
             print("To pass `--help` to protoc, use flag `--protohelp`. "
@@ -92,20 +102,23 @@ class Compiler:
                 output=os.getcwd(),
                 **kwargs) -> Optional[str]:
         """
-        Compile for given options, see compile-proto compile -- --help
+        Compile for given options, see ``compile-proto compile -- --help``
 
-        :param quiet: Don't print output from protoc plugin if possible
-        :param output: output directory (default: working directory)
-        :param options: one or multiple options see `compile-proto OPTIONS` default: [py]
-        :param protoc_files: files to compile, passed through to protoc
-        :param plugin_params: mapping of additional parameters for the protoc plugin (not the compiler itself)
-        :param kwargs: Passed to protoc invocation, see compile-proto call -- --help.
-        :return: the output path
+        Args:
+            quiet: Don't print output from protoc plugin if possible
+            output: output directory (default: working directory)
+            options: one or multiple options see `compile-proto OPTIONS` default: [py]
+            protoc_files: files to compile, passed through to protoc
+            plugin_params: mapping of additional parameters for the protoc plugin (not the compiler itself)
+            kwargs: Passed to protoc invocation, see compile-proto call -- --help.
+
+        Returns:
+            the output path
         """
-        params = (plugin_params, ) if plugin_params else ()
+        params = (plugin_params,) if plugin_params else ()
 
         if not options:
-            warn("No options specified, no compilation will take place.")
+            warnings.warn("No options specified, no compilation will take place.")
             return
 
         for option in CompileOption.from_string_list(options).disjunct:
@@ -132,8 +145,8 @@ class Rewriter:
                  root_package: str = None,
                  output_root: os.PathLike = './'):
 
-        self._contents: Optional[Dict[Path, str]] = None
-        self._roots: Optional[Dict[Path, Path]] = None
+        self._contents: Optional[Dict[pathlib.Path, str]] = None
+        self._roots: Optional[Dict[pathlib.Path, pathlib.Path]] = None
         self.root_package = root_package
         self.output_root = output_root
 
@@ -141,7 +154,7 @@ class Rewriter:
         """
         Reads .proto files from a directory, manipulate them with the other commands afterwards.
         """
-        sources = [Path(s) for s in sources]
+        sources = [pathlib.Path(s) for s in sources]
         found = {s: find_proto_files(s) for s in sources if s.is_dir()}
         no_proto_dirs = [s for s in sources if not s in found or not found[s]]
         assert not no_proto_dirs, f"Check path[s] {no_proto_dirs}: Not a directory or does not contain a .proto file."
@@ -153,6 +166,12 @@ class Rewriter:
 
     @property
     def root_package(self):
+        """
+        root package for generated directory structure
+
+        Returns:
+            str: root package which is enforced
+        """
         return self._root_package
 
     @root_package.setter
@@ -167,11 +186,14 @@ class Rewriter:
 
     @property
     def output_root(self):
+        """
+        Root directory of new directory structure.
+        """
         return self._out_root
 
     @output_root.setter
     def output_root(self, value):
-        self._out_root = Path(value)
+        self._out_root = pathlib.Path(value)
 
     def _get_package(self, path):
         relative_path = path.relative_to(self._roots[path])
@@ -183,25 +205,37 @@ class Rewriter:
         # applying fix_package multiple times is ok since it doesn't change the package
         root_pkg, sub_pkgs = match.groups()
         sub_pkgs = sub_pkgs[1:].split('.')  # skip first char, since it's a dot anyways
-        pkg_iterator = dropwhile(lambda p: p in self._root_package, chain([root_pkg], sub_pkgs))
-        return '.'.join(chain([self._root_package], pkg_iterator))
+        pkg_iterator = itertools.dropwhile(lambda p: p in self._root_package, itertools.chain([root_pkg], sub_pkgs))
+        return '.'.join(itertools.chain([self._root_package], pkg_iterator))
 
-    def _fix_package_declaration(self,  match):
+    def _fix_package_declaration(self, match):
         return f"package {self._fix_package(match)};"
 
     @property
     def calculated_packages(self):
+        """
+        Returns:
+            dict: Dictionary mapping file contents to package names
+        """
         return {p: self._get_package(p) for p in self._contents}
 
-    def _fix_import(self, root: Path, match):
+    def _fix_import(self, root: pathlib.Path, match):
         path, file = match.groups()
         import_package = self.calculated_packages.get(root / path / file)
-        return '/'.join(chain(import_package.split('.'), [file])) if import_package else None
+        return '/'.join(itertools.chain(import_package.split('.'), [file])) if import_package else None
 
     def _fix_import_declaration(self, root, match):
         return f'import "{self._fix_import(root, match)}";'
 
     def fix_imports(self):
+        """
+        Modify internal file content representation to match internal file locations, so that imports are importing
+        the right files.
+
+        Returns:
+            Rewriter: Reference to self to chain commands with `fire`_
+
+        """
         process_imports = {p: {statement: self._fix_import(self._roots[p], statement)}
                            for p, content in self._contents.items()
                            for statement in self._IMPORT.finditer(content)}
@@ -209,18 +243,26 @@ class Rewriter:
         failed = {p: imports for p, imports in process_imports.items() if any(v is None for v in imports.values())}
 
         if any(failed):
-            warn('\n'.join("Can't resolve imports {imports} from file {path}".format(
+            warnings.warn('\n'.join("Can't resolve imports {imports} from file {path}".format(
                 path=path, imports=[k.group(0) for k, v in imports.items() if v is None]
             ) for path, imports in failed.items()) +
-                 " Make sure the respective files are also included for rewriting")
+                          " Make sure the respective files are also included for rewriting")
             return self
 
-        self._contents = {f: self._IMPORT.sub(partial(self._fix_import_declaration, self._roots[f]), content)
+        self._contents = {f: self._IMPORT.sub(functools.partial(self._fix_import_declaration, self._roots[f]), content)
                           for f, content in self._contents.items()}
         return self
 
     def fix_packages(self):
-        package_declarations = chain.from_iterable(self._PACKAGE.finditer(content) for content in self._contents.values())
+        """
+        Modify internal content representation such that ``package`` declarations in ``.proto`` source files match the
+        internal directory structure
+
+        Returns:
+            Rewriter: Reference to self to chain commands with `fire`_
+        """
+        package_declarations = itertools.chain.from_iterable(
+            self._PACKAGE.finditer(content) for content in self._contents.values())
         for declared_package in package_declarations:
             root_package = declared_package[1]
             sub_packages = declared_package[2].replace('.', r'\.') if declared_package[2] else ""
@@ -230,6 +272,17 @@ class Rewriter:
         return self
 
     def write(self, dry_run=True):
+        """
+        Write internal content representation to :attr:`.output_root` according to
+        internal :attr:`package mapping <.calculated_packages>`
+
+        Args:
+            dry_run (bool): if True don't actually write outputs.
+
+        Returns:
+            Rewriter: Reference to self to chain commands with `fire`_
+        """
+
         if dry_run:
             return
 
@@ -252,12 +305,24 @@ def check_fire():
 
 
 def compile_proto():
+    """
+    Entry point for CLI.
+
+        `fire`_ :class:`Compiler`
+
+    """
+
     fire = check_fire()
     if fire:
         fire.Fire(Compiler)
 
 
 def rewrite_proto():
+    """
+    Entry point for CLI
+
+        `fire`_ :class:`Rewriter`
+    """
     fire = check_fire()
     if fire:
         fire.Fire(Rewriter)

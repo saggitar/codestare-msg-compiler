@@ -2,10 +2,7 @@ codestare.compiletools package
 ==============================
 
 .. automodule:: codestare.compiletools
-   :undoc-members:
-   :members:
-   :show-inheritance:
-   :noindex:
+   :no-undoc-members:
 
 Submodules
 ----------
@@ -14,25 +11,16 @@ codestare.compiletools.cmd module
 ---------------------------------
 
 .. automodule:: codestare.compiletools.cmd
-   :undoc-members:
-   :members:
-   :show-inheritance:
-   :noindex:
+   :no-undoc-members:
 
 codestare.compiletools.compile module
 -------------------------------------
 
 .. automodule:: codestare.compiletools.compile
-   :undoc-members:
-   :members:
-   :show-inheritance:
-   :noindex:
+   :no-undoc-members:
 
 codestare.compiletools.options module
 -------------------------------------
 
 .. automodule:: codestare.compiletools.options
-   :undoc-members:
-   :members:
-   :show-inheritance:
-   :noindex:
+   :no-undoc-members:

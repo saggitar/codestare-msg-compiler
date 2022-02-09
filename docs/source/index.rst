@@ -6,8 +6,19 @@
 Codestare Proto Message Setuptools Plugin
 =========================================
 
-This site covers the usage the setuptools plugin used to generate flexible protobuf message python bindings for
-:doc:`
+This site covers the usage the setuptools plugin used to generate flexible protobuf message python bindings.
+
+Getting started
+---------------
+
+Installation and basic usage of the setuptools plugin is covered in the tutorial.
+
+.. toctree::
+    :maxdepth: 2
+
+    getting-started
+
+
 
 .. _cli-docs:
 

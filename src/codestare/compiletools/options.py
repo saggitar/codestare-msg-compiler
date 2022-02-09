@@ -1,3 +1,6 @@
+"""
+Options for compilation are represented using :class:`.CompileOption`
+"""
 import operator
 from enum import Flag, auto
 from functools import reduce
@@ -11,17 +14,31 @@ class CompileOption(Flag):
     """
     Describes available compile options
     """
+    # empty docstrings for enum values to include them in documentation
+
+    #:
     JAVA = auto()
+    #:
     JSLIBRARY = auto()
+    #:
     JSINDIVIDUAL = auto()
+    #:
     CSHARP = auto()
+    #:
     CPP = auto()
+    #:
     PYTHON_BETTER_PROTO = auto()
+    #:
     PYTHON_MYPY = auto()
+    #:
     PYTHON_PROTOPLUS = auto()
+    #:
     PYTHON_BASIC = auto()
+    #:
     JAVASCRIPT = JSINDIVIDUAL | JSLIBRARY
+    #:
     PYTHON = PYTHON_MYPY | PYTHON_BETTER_PROTO | PYTHON_PROTOPLUS | PYTHON_BASIC
+    #:
     ALL = JAVA | JAVASCRIPT | CSHARP | CPP | PYTHON
 
     @property
@@ -39,6 +56,15 @@ class CompileOption(Flag):
 
     @classmethod
     def from_str(cls, value) -> 'CompileOption':
+        """
+        Convert a string to an enum value
+
+        Args:
+            value (str): valid values are defined by :attr:`.arguments`
+
+        Returns:
+            CompileOption: Enum flag
+        """
         matching = reduce(operator.and_, [o for o in cls if value in o.arguments])
 
         if not matching:
@@ -48,6 +74,16 @@ class CompileOption(Flag):
 
     @classmethod
     def from_string_list(cls, values):
+        """
+        Convert a string list to an enum value (combined flag for all values in list)
+
+        Args:
+            values (List[str]): list of values according to :attr:`.arguments`
+
+        Returns:
+            CompileOption: combined flag
+
+        """
         return reduce(operator.and_, [cls.from_str(v) for v in values])
 
     @property
@@ -92,14 +128,14 @@ class CompileOption(Flag):
         """
         Like normal integer flags, individual flags are all powers of 2,
         see https://docs.python.org/3/library/enum.html#flag
-        combined flags are not, so we test that with `o.value & (o.value - 1)`
+        combined flags are not, so we test that with ``o.value & (o.value - 1)``
         """
         return self.value & (self.value - 1)
 
     def parameters(self, *args, **kwargs):
         """
-        some options can use request parameters for the plugin, this is actually also
-        how the javascript "library / binary" stuff is implemented
+        some options can use request parameters for the plugin, this is e.g.
+        how the javascript plugin implements "library / binary" compilation
         """
         args = set(args)
 
@@ -115,9 +151,7 @@ class CompileOption(Flag):
             args.add('binary')
 
         if self == self.PYTHON_PROTOPLUS:
-            pass
-            # args.add('readable_imports')
-            # kwargs['save_request'] = 'protoc_request.txt'
+            args.add('readable_imports')
 
         return ','.join(chain((f'{k}={v}' for k, v in kwargs.items()), args))
 

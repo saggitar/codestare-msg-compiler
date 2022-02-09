@@ -1,55 +1,86 @@
 #!/usr/bin/env python
 
 """
-https://github.com/protocolbuffers/protobuf/issues/1491
 Googles own python plugin implementation for protoc does not compile files with relative imports, like
-e.g. https://github.com/danielgtaylor/python-betterproto which also generates prettier python code.
-The problem is, that the implementation from betterproto only works when all sources are compiled
-simultaneously (all proto files as arguments to `protoc` invocation, otherwise files might be
-overwritten.
-This would break the support for build tools like cmake / make and so on, so it's not possible to implement it
-this way in the official plugin.
+e.g. `betterproto`_ (related `issue`_). Several third party tools try to "fix" this by either pre- or post-processing
+the generated files, or using a custom ``protoc`` plugin (like `betterproto`_).
 
+Conversely, `betterproto's <betterproto>`_ relative imports only succeed when all sources are compiled simultaneously
+(all proto files as arguments to `protoc` invocation, otherwise files might be overwritten).
+This would breaks support for build tools like cmake / make, allowing parallel compilation of ``.proto`` files
+i.e. it seems not possible to implement in the official plugin.
+
+Google itself develops an `alternative protobuf module <protoplus>`_ which aims to use protocol buffers with more
+idiomatic python code but has no official compiler plugin as of now. A third party plugin `plusplugin`_ loosely based on
+the `mypy plugin <mypy-protobuf>`_ is available (experimental).
+
+.. _issue:
+   https://github.com/protocolbuffers/protobuf/issues/1491
+
+.. _betterproto:
+   https://github.com/danielgtaylor/python-betterproto
+
+.. _protoplus:
+   https://github.com/googleapis/proto-plus-python
+
+.. _plusplugin:
+   https://github.com/saggitar/proto-plus-plugin
+
+.. _mypy-protobuf:
+   https://github.com/nipunn1313/mypy-protobuf
 """
 import contextlib
+import distutils.cmd
+import distutils.errors
+import distutils.log
+import enum
 import filecmp
 import fnmatch
+import functools
+import importlib.resources
+import itertools
+import os
+import os.path as op
+import pathlib
 import re
 import sys
 import tempfile
-from enum import Enum
-from functools import wraps
-
-import setuptools
-import os
-import distutils.log
-import os.path as op
-from distutils.errors import DistutilsOptionError
 from abc import ABC
-from pathlib import Path
-from setuptools.command.build_py import build_py
-from distutils.cmd import Command
-from itertools import chain
 from typing import List, Optional
-from importlib.resources import read_text
-from setuptools.command.egg_info import egg_info
-from setuptools.config import ConfigHandler
+
+import setuptools.command.build_py
+import setuptools.command.egg_info
 
 from . import find_proto_files, has_module
-from .options import CompileOption
 from .compile import Compiler, Rewriter
+from .options import CompileOption
 
-PathList = Optional[List[Path]]
+PathList = Optional[List[pathlib.Path]]
 
 
 @contextlib.contextmanager
 def compare_files():
+    """
+    Context manager to monkey patch :func:`distutils.file_util.copy_file` to only copy files which are not equal
+    according to :func:`filecmp.cmp`.
+
+    Yields:
+        None
+
+    Example:
+        Use the context manager with methods implicitly using :func:`distutils.file_util.copy_file`::
+
+            class CustomCommand(distutils.cmd.Command):
+                def copy_not_equal(new, old):
+                    with compare_files():
+                        self.copy_tree(new, old)
+    """
     import distutils.file_util as fu
     orig = fu.copy_file
 
-    @wraps(orig)
+    @functools.wraps(orig)
     def wrapper(src, dst, *args, verbose=1, **kwargs):
-        if Path(dst).exists() and filecmp.cmp(src, dst):
+        if pathlib.Path(dst).exists() and filecmp.cmp(src, dst):
             if verbose >= 1:
                 distutils.log.debug("not copying %s (output up-to-date)", src)
             return dst, 0
@@ -61,23 +92,41 @@ def compare_files():
     fu.copy_file = orig
 
 
-class PathCommand(Command, ABC):
+class PathCommand(distutils.cmd.Command, ABC):
+    """
+    Abstract command class supporting verification of options representing path and directory lists
+    """
     def ensure_path_list(self, option):
+        """
+        Ensure option is list of paths
+
+        Args:
+            option (str): name of option
+
+        """
         val = getattr(self, option)
         if val is None:
             return
 
-        if not isinstance(val, list) or not all(isinstance(o, Path) for o in val):
+        if not isinstance(val, list) or not all(isinstance(o, pathlib.Path) for o in val):
             self.ensure_string_list(option)
-            val = [Path(s) for s in getattr(self, option)]
+            val = [pathlib.Path(s) for s in getattr(self, option)]
 
         not_exist = [p for p in val if not p.exists()]
         if any(not_exist):
-            raise DistutilsOptionError(f"Paths {', '.join(str(o.absolute()) for o in not_exist)} don't exist.")
+            raise distutils.errors.DistutilsOptionError(
+                f"Paths {', '.join(str(o.absolute()) for o in not_exist)} don't exist.")
 
         setattr(self, option, val)
 
     def ensure_dir_list(self, option):
+        """
+        Ensure option is list of directories
+
+        Args:
+            option (str): name of option
+
+        """
         self.ensure_path_list(option)
         val = getattr(self, option)
         if val is None:
@@ -85,12 +134,29 @@ class PathCommand(Command, ABC):
 
         not_dir = [p for p in val if not p.is_dir()]
         if any(not_dir):
-            raise DistutilsOptionError(f"Paths {', '.join(str(o.absolute()) for o in not_dir)} are not directories.")
+            raise distutils.errors.DistutilsOptionError(
+                f"Paths {', '.join(str(o.absolute()) for o in not_dir)} are not directories.")
 
 
 class CompileBase(PathCommand):
+    """
+    Base class for setuptools commands handling compilation of ``.proto`` files.
 
+    Attributes:
+
+        includes (List[pathlib.Path]): Directories containing ``.proto`` files to pass as includes to ``protoc``
+        output (pathlib.Path): compilation output directory
+        files (List[pathlib.Path], optional): actual list of ``.proto`` files to compile
+        proto_package (pathlib.Path, optional): if :obj:`.files` is missing, search this path for ``.proto`` files
+        force (bool): Force compilation / copying of all generated files disregarding changed contents. Defaults to False.
+        dry_run (bool): Don't copy generated files to build dir, only print list of generated files. Defaults to False.
+        options (List[str]): List of :attr:`option flags <codestare.compiletools.compile.Compiler.OPTIONS>`
+            to trigger compilation flavors
+        protoc (pathlib.Path): Path to ``protoc`` executable. If not supplied, ``protoc`` needs to be in ``$PATH``
+        plugin_params (str, optional): Some ``protoc`` plugins support additional parameters
+    """
     description = "Compile proto files"
+
     user_options = [
         ('protoc=', None, 'protoc compiler location'),
         ('output=', None, 'Output directory for compiled files'),
@@ -102,13 +168,60 @@ class CompileBase(PathCommand):
                           f"{CompileOption.ALL.disjunct}"
                           f" (default)")
     ]
+    """
+    User options for :class:`distutils.cmd.Command`. See :meth:`CompileBase.run` for more info about how they are used
+    in particular.
+    
+    Each option is used to supply the corresponding attribute: for more information about e.g. ``user_options['force']``
+    refer to :attr:`.force`.
+    
+    User options are passed between build steps. If not supplied specifically for this build command, the following
+    mapping occurs (options specified multiple times will take the first existing default value):
+    
+    ============= ===========================================
+    option        default ``{command_name}.{option_name}``
+    ============= ===========================================
+    includes      rewrite_proto.outputs
+    output        compile_proto.build_lib
+    includes      compile_proto.include_proto
+    proto_package compile_proto.proto_package
+    force         compile_proto.force
+    dry_run       compile_proto.force
+    ============= ===========================================
+    
+    """
 
     @contextlib.contextmanager
     def redirect_build_dir(self):
+        """
+        Context manager to redirect build directory to temporary directory.
+        This is the easiest way to only "build" changed protobuf modules:
+        We build to temp dir, then copy to real build dir if files are different.
+
+        Note:
+
+            There is no way to tell the ``protoc`` compiler to only build files that have changed / updated sources.
+            This is typically the task of ``make`` or some other build script, and all files passed to ``protoc`` will
+            be built (in theory the plugin could also handle this, but none of the default plugins do). This means
+            they will have new file generation timestamps and will
+
+            - probably be marked as changed in the version control system
+            - be copied to the build directory by the python build toolchain
+
+            Because of this, we need to compare the file contents instead of the timestamps, even when building to
+            a temporary directory, see :func:`compare_files`.
+
+
+            This context manager changes :attr:`.output` as a side effect
+
+        Yields:
+            Tuple[pathlib.Path, pathlib.Path]: old build dir, new build dir
+
+        """
         original = self.output
         tf = None
         if not self.force:
-            executable = Path(sys.executable)
+            executable = pathlib.Path(sys.executable)
             suffix = '_'.join(p.replace('.', '_') for p in executable.parts if not p == executable.anchor)
             tf = tempfile.TemporaryDirectory(suffix=suffix,
                                              prefix=__name__.replace('.', '_'))
@@ -121,6 +234,20 @@ class CompileBase(PathCommand):
         self.output = original
 
     def run(self):
+        """
+        Calls :meth:`Compiler.compile` with :attr:`.user_options` as keyword arguments.
+
+        This triggers a compilation of :attr:`.files` using the :attr:`.protoc` executable, passing :attr:`.includes`
+        as includes (``-I`` flag) and :attr:`.plugin_params`, using the plugin and default options for :attr:`.options`
+        (see :mod:codestare.compiletools.options) with output directory :attr:`.output`.
+
+        If :attr:`.force` is not set, only generated files that don't exist with the same contents in :attr:`.output`
+        will be copied from the temporary build directory.
+
+        If :attr:`.dry_run` is set, no files will be copied whatsoever, and only the ``protoc`` invocation will be
+        shown.
+
+        """
         compiler = Compiler(protoc=self.protoc)
 
         with self.redirect_build_dir() as (old, temp):
@@ -173,6 +300,11 @@ class CompileBase(PathCommand):
 
 
 class CompileProtoPython(CompileBase):
+    """
+    Command to compile with compilation option :attr:`~codestare.compiletools.options.CompileOption.PYTHON_BASIC`
+    and generate ``__init__.py`` files with :class:`GenerateInits`
+    """
+
     description = "compile python protobuf modules (google plugin)"
     user_options = CompileBase.user_options[:-1]
 
@@ -186,6 +318,10 @@ class CompileProtoPython(CompileBase):
 
 
 class CompileProtoMypy(CompileBase):
+    """
+    Command to compile with compilation option :attr:`~codestare.compiletools.options.CompileOption.PYTHON_MYPY`,
+    to generate ``.pyi`` stubs.
+    """
     description = "compile stub files for python protobuf modules (mypy plugin)"
     user_options = CompileBase.user_options[:-1]
 
@@ -195,6 +331,10 @@ class CompileProtoMypy(CompileBase):
 
 
 class CompileBetterproto(CompileBase):
+    """
+    Command to compile with compilation option :attr:`~codestare.compiletools.options.CompileOption.PYTHON_BETTER_PROTO`
+    and generate ``__init__.py`` files with :class:`GenerateInits`
+    """
     description = "compile alternative python protobuf modules (betterproto plugin)"
     user_options = CompileBase.user_options[:-1]
 
@@ -206,8 +346,19 @@ class CompileBetterproto(CompileBase):
         ('generate_inits', None)
     ]
 
-
 class CompileProtoPlus(CompileBase):
+    """
+    Command to compile with compilation option :attr:`~codestare.compiletools.options.CompileOption.PYTHON_BETTER_PROTO`
+    and generate ``__init__.py`` files with :class:`GenerateInits`
+
+    Note:
+        Although generating ``__init__.py`` files via the :class:`GenerateInits` setuptools command is supported for
+        :class:`CompileProtoPlus`, the ``protoc`` plugin used in this compilation handles generation of init files.
+
+        It is recommended to not use the :class:`generate_inits command<GenerateInits>` or at least not to use ``force``
+        to avoid overwriting the files.
+
+    """
     description = "compile alternative python protobuf modules (protoplus plugin)"
     user_options = CompileBase.user_options[:-1]
 
@@ -221,15 +372,36 @@ class CompileProtoPlus(CompileBase):
 
 
 class CompileProto(PathCommand):
+    """
+    Triggers compilation of all available python flavors that are turned on via :attr:`.flavor`.
+    If :attr:`.proto_package` and :attr:`.include_proto` are supplied, enforce package structure according to
+    :attr:`.proto_package` by rewriting included source files with
+    :class:`rewrite subcommand <codestare.compiletools.cmd.RewriteProto>`
+
+    Attributes:
+        include_proto (List[pathlib.Path]): root dir for proto files
+        proto_package (str): parent package that will be enforced for protobuf modules
+        build_lib (os.path.PathLike): output directory for protobuf library
+        flavor (str, optional): flavor of compiled code
+        force (bool, optional): forcibly build everything (ignore file timestamps)
+        dry_run (bool, optional): don't do anything but show protoc commands
+    """
+
     description = "compile protobuf files with [all] available python plugins"
 
-    class Flavor(Enum):
+    class Flavor(enum.Enum):
+        """
+        Possible Flavors for python compilations
+        """
         MYPY = 'mypy'
         BASIC = 'python'
         BETTER = 'better'
         PLUS = 'plus'
 
     flavors = {s.value: s for s in Flavor}
+    """
+    Mapping of options to enums
+    """
 
     user_options = [
         ('include-proto', None, 'root dir for proto files'),
@@ -239,6 +411,25 @@ class CompileProto(PathCommand):
         ('force', 'f', "forcibly build everything (ignore file timestamps)"),
         ('dry-run', None, 'don\'t do anything but show protoc commands')
     ]
+    """
+    User options for :class:`distutils.cmd.Command` behaviour.
+
+    Each option is used to supply the corresponding attribute: for more information about e.g. ``user_options['force']``
+    refer to :attr:`.force`.
+
+    User options are passed between build steps. If not supplied specifically for this build command, the following
+    mapping occurs (options specified multiple times will take the first existing default value):
+
+    ============= ===========================================
+    option        default ``{command_name}.{option_name}``
+    ============= ===========================================
+    build_lib     build_py_proto.build_lib
+    include_proto build_py_proto.include_proto
+    force         build_py_proto.force
+    dry_run       build_py_proto.dry_run
+    ============= ===========================================
+
+    """
 
     def initialize_options(self) -> None:
         self.include_proto = None
@@ -260,10 +451,19 @@ class CompileProto(PathCommand):
         self.ensure_string('flavor')
         if self.flavor is not None:
             if self.flavor not in self.flavors:
-                raise DistutilsOptionError(f"Only possible options for flavor are {','.join(self.flavors)}")
+                raise distutils.errors.DistutilsOptionError(
+                    f"Only possible options for flavor are {','.join(self.flavors)}")
             self.flavor = self.flavors[self.flavor]
 
     def run(self):
+        """
+        Trigger all compilations and add compiled packages to distribution if missing.
+
+        Note:
+            If python packages are generated which are not already part of the distribution (through setting
+            ``packages`` option in ``setup.py`` or ``setup.cfg`` as usual) this command will issue a warning
+
+        """
         if self.include_proto is not None:
             self.announce(f"Including *.proto files from path[s] {self.include_proto}", distutils.log.INFO)
         else:
@@ -318,6 +518,15 @@ class CompileProto(PathCommand):
 
 
 class RewriteProto(PathCommand):
+    """
+    Setuptools command to rewrite ``.proto`` sources in a way that produces a specified python package structure.
+
+    Attributes:
+        proto-package (str): parent package that will be enforced for protobuf modules
+        inplace (bool): write output to compile_proto include directory
+        use_build (bool): write output to build_lib directory [default]
+
+    """
     description = "rewrite protobuf inputs to fake specific package structure (experimental)"
 
     user_options = [
@@ -352,14 +561,14 @@ class RewriteProto(PathCommand):
         self.ensure_dir_list('outputs')
 
         if self.inputs is None:
-            raise DistutilsOptionError(f"Can't rewrite proto files without inputs")
+            raise distutils.errors.DistutilsOptionError(f"Can't rewrite proto files without inputs")
 
         if self.outputs is None:
-            raise DistutilsOptionError(f"Can't rewrite proto files without outputs")
+            raise distutils.errors.DistutilsOptionError(f"Can't rewrite proto files without outputs")
 
         if len(self.inputs) != len(self.outputs):
-            raise DistutilsOptionError(f"can't rewrite proto files from {self.inputs}: "
-                                       f"wrong number of outputs ({len(self.outputs)})")
+            raise distutils.errors.DistutilsOptionError(f"can't rewrite proto files from {self.inputs}: "
+                                                        f"wrong number of outputs ({len(self.outputs)})")
 
         self.announce(f"Enforcing python package {self.proto_package} for compiled modules.", distutils.log.INFO)
 
@@ -376,7 +585,10 @@ class RewriteProto(PathCommand):
 
 
 class GenerateInits(PathCommand):
-    class _Styles(Enum):
+    """
+    Setuptools command to generate missing ``__init__.py`` files in generated python package tree.
+    """
+    class _Styles(enum.Enum):
         FANCY = 'fancy'
         WILDCARD = 'wildcard'
         EMPTY = 'empty'
@@ -386,7 +598,9 @@ class GenerateInits(PathCommand):
 
     user_options = [
         ('packages', None, 'generate for these packages only'),
-        ('recursive', None, 'if set, you only need to specify parent packages, all subpackages will also be considered'),
+        (
+            'recursive', None,
+            'if set, you only need to specify parent packages, all subpackages will also be considered'),
         ('no-recursive', None, 'only the exact packages specified in `packages` are considered. [default]'),
         ('import_style', None, f'One of: {", ".join(styles)}. See documentation for details about generated inits'),
     ]
@@ -411,12 +625,13 @@ class GenerateInits(PathCommand):
         self.ensure_string('import_style')
 
         if self.package_root is None:
-            raise DistutilsOptionError(f"Can't generate inits without "
-                                       f"package root (no output from `compile_python`?)")
+            raise distutils.errors.DistutilsOptionError(f"Can't generate inits without "
+                                                        f"package root (no output from `compile_python`?)")
 
         if self.import_style is not None:
             if self.import_style not in self.styles:
-                raise DistutilsOptionError(f"Only supported values for import_style are: {', '.join(self.styles)}")
+                raise distutils.errors.DistutilsOptionError(
+                    f"Only supported values for import_style are: {', '.join(self.styles)}")
             else:
                 self.import_style = self.styles[self.import_style]
 
@@ -424,12 +639,13 @@ class GenerateInits(PathCommand):
         """
         Generate recursive init files with wildcard imports for a package.
         """
-        def is_package(path: Path):
+
+        def is_package(path: pathlib.Path):
             return path.is_dir() and list(path.glob('**/__init__.py'))
 
         if self.packages is None:
-            root = Path(self.package_root)
-            available = (f"'{p.name}'" for p in filter(is_package, filter(Path.is_dir, root.glob('*'))))
+            root = pathlib.Path(self.package_root)
+            available = (f"'{p.name}'" for p in filter(is_package, filter(pathlib.Path.is_dir, root.glob('*'))))
             self.announce(f"no packages specified -> skipping. "
                           f"(possible packages found in {self.package_root}: "
                           f"{', '.join(available) or 'No packages found'})", distutils.log.INFO)
@@ -437,7 +653,7 @@ class GenerateInits(PathCommand):
             return
 
         search_dirs = (
-            Path(self.package_root) / op.join(*package.split('.'))
+            pathlib.Path(self.package_root) / op.join(*package.split('.'))
             for package in self.packages or ()
         )
 
@@ -448,8 +664,8 @@ class GenerateInits(PathCommand):
 
         skipped = []
 
-        for package in chain(*searches):
-            init: Path = package / '__init__.py'
+        for package in itertools.chain(*searches):
+            init: pathlib.Path = package / '__init__.py'
             name = '.'.join(package.relative_to(self.package_root).parts)
             if init.exists() and not self.force:
                 skipped += [name]
@@ -458,7 +674,7 @@ class GenerateInits(PathCommand):
 
             with init.open('w', encoding='utf-8') as f:
                 if self.import_style == self._Styles.FANCY:
-                    f.write(read_text(__package__, 'init_template'))
+                    f.write(importlib.resources.read_text(__package__, 'init_template'))
                 if self.import_style == self._Styles.WILDCARD:
                     modules = [p for p in init.parent.glob('*.py') if not p.name.startswith('_')]
                     f.write('\n'.join(f"from .{m.stem} import *" for m in modules))
@@ -476,12 +692,12 @@ class GenerateInits(PathCommand):
             self.announce(f"No init files generated for {self.package_root}", distutils.log.INFO)
 
 
-class UbiiBuildPy(build_py):
+class UbiiBuildPy(setuptools.command.build_py.build_py):
     def __getattr__(self, item):
         if item == 'user_options':
-            return build_py.user_options + CompileProto.user_options
+            return setuptools.command.build_py.build_py.user_options + CompileProto.user_options
 
-        return build_py.__getattr__(self, item)
+        return setuptools.command.build_py.build_py.__getattr__(self, item)
 
     def initialize_options(self) -> None:
         super().initialize_options()
@@ -512,7 +728,7 @@ class UbiiBuildPy(build_py):
     ]
 
 
-def write_package(cmd: egg_info, basename, filename, force=False):
+def write_package(cmd: setuptools.command.egg_info.egg_info, basename, filename, force=False):
     compile_command = cmd.get_finalized_command('compile_proto')
     proto_plus_cmd = (cmd.get_finalized_command('compile_protoplus')
                       if 'compile_protoplus' in compile_command.get_sub_commands()
