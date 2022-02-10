@@ -1,0 +1,15 @@
+syntax = "proto3";
+package namespace.services;
+
+import "services/service.proto";
+import "general/success.proto";
+import "general/error.proto";
+
+message ServiceReply {
+    oneof type {
+        namespace.general.Success success = 1;
+        namespace.general.Error error = 2;
+        namespace.services.Service service = 3;
+        namespace.services.ServiceList service_list = 4;
+    }
+}

@@ -12,6 +12,7 @@
 #
 import datetime
 import os
+import pathlib
 import sys
 
 sys.path.insert(0, os.path.abspath('.'))
@@ -43,6 +44,7 @@ extensions = [
     'sphinxcontrib.napoleon',
     'sphinx.ext.intersphinx',
     'sphinxcontrib.programoutput',
+    'sphinx.ext.viewcode',
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -106,3 +108,13 @@ intersphinx_mapping = {
     'plus': ('https://proto-plus-python.readthedocs.io/en/latest', None),
     'proto': ('https://googleapis.dev/python/protobuf/latest', None),
 }
+
+import shutil
+example_project_build_dirs = [
+    pathlib.Path("example_project/src/py/namespace/proto/v1"),
+    pathlib.Path("./example_project/build")
+]
+for directory in example_project_build_dirs:
+    directory.mkdir(parents=True, exist_ok=True)
+    shutil.rmtree(directory)
+    directory.mkdir()

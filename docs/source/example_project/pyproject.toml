@@ -1,0 +1,13 @@
+[build-system]
+requires = [
+    "setuptools>=42",
+    "wheel",
+    "importlib_metadata;python_version<'3.8'",
+    "codestare-msg-compiler[protoplus] >= 0.0.4a1dev5",
+    "setuptools_scm>=6.2",
+]
+
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools_scm]
+local_scheme = "no-local-version"

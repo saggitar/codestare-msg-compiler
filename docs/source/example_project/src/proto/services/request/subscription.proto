@@ -1,0 +1,14 @@
+syntax = "proto3";
+package namespace.services.request;
+
+message TopicSubscription {
+    string client_id = 1;
+    repeated string subscribe_topics = 2;
+    repeated string unsubscribe_topics = 3;
+}
+
+message RegexSubscription {
+    string client_id = 1;
+    repeated string subscribe_regex = 2;
+    repeated string unsubscribe_regex = 3;
+}
