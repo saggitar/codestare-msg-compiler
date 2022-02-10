@@ -6,7 +6,8 @@
 Codestare Proto Message Setuptools Plugin
 =========================================
 
-This site covers the usage the setuptools plugin used to generate flexible protobuf message python bindings.
+This site covers the usage the ``codestare-msg-compiler`` cli tools and
+setuptools commands used to generate flexible protobuf python bindings.
 
 Getting started
 ---------------

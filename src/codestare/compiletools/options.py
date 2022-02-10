@@ -15,7 +15,6 @@ class CompileOption(Flag):
     Describes available compile options
     """
     # empty docstrings for enum values to include them in documentation
-
     #:
     JAVA = auto()
     #:
@@ -135,7 +134,11 @@ class CompileOption(Flag):
     def parameters(self, *args, **kwargs):
         """
         some options can use request parameters for the plugin, this is e.g.
-        how the javascript plugin implements "library / binary" compilation
+        how the javascript plugin implements "library / binary" compilation.
+
+        - :attr:`.JSLIBRARY` adds ``library='protobuf_library',binary``
+        - :attr:`.JSINDIVIDUAL` adds ``import_style='commonjs',binary``
+        - :attr:`.PYTHON_PROTOPLUS` adds ``readable_imports``
         """
         args = set(args)
 

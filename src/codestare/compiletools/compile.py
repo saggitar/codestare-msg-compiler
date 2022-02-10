@@ -4,18 +4,20 @@ Protoc compiler wrapper CLI (using `fire`_)
 .. _fire:
     https://python-fire.readthedocs.io/en/latest/
 """
+from __future__ import annotations
 
 import distutils.log
 import distutils.spawn
 import functools
-import itertools
 import os
 import pathlib
 import re
 import subprocess
-import sys
 import warnings
 from typing import List, Optional, Dict
+
+import itertools
+import sys
 
 from . import find_proto_files
 from .options import CompileOption
@@ -142,7 +144,7 @@ class Rewriter:
     _PACKAGE = re.compile(r'^package {pkg};$'.format(pkg=package_regex), flags=re.MULTILINE)
 
     def __init__(self,
-                 root_package: str = None,
+                 root_package: str,
                  output_root: os.PathLike = './'):
 
         self._contents: Optional[Dict[pathlib.Path, str]] = None
@@ -150,13 +152,13 @@ class Rewriter:
         self.root_package = root_package
         self.output_root = output_root
 
-    def read(self, *sources: os.PathLike):
+    def read(self, *dirs: os.PathLike):
         """
-        Reads .proto files from a directory, manipulate them with the other commands afterwards.
+        Reads .proto files from directories, manipulate them with the other commands afterwards.
         """
-        sources = [pathlib.Path(s) for s in sources]
-        found = {s: find_proto_files(s) for s in sources if s.is_dir()}
-        no_proto_dirs = [s for s in sources if not s in found or not found[s]]
+        dirs = [pathlib.Path(s) for s in dirs]
+        found = {s: find_proto_files(s) for s in dirs if s.is_dir()}
+        no_proto_dirs = [s for s in dirs if not s in found or not found[s]]
         assert not no_proto_dirs, f"Check path[s] {no_proto_dirs}: Not a directory or does not contain a .proto file."
 
         # invert dictionary to lookup parents
@@ -208,16 +210,13 @@ class Rewriter:
         pkg_iterator = itertools.dropwhile(lambda p: p in self._root_package, itertools.chain([root_pkg], sub_pkgs))
         return '.'.join(itertools.chain([self._root_package], pkg_iterator))
 
-    def _fix_package_declaration(self, match):
-        return f"package {self._fix_package(match)};"
-
     @property
     def calculated_packages(self):
         """
         Returns:
             dict: Dictionary mapping file contents to package names
         """
-        return {p: self._get_package(p) for p in self._contents}
+        return {p: self._get_package(p) for p in self._contents or ()}
 
     def _fix_import(self, root: pathlib.Path, match):
         path, file = match.groups()
@@ -261,15 +260,39 @@ class Rewriter:
         Returns:
             Rewriter: Reference to self to chain commands with `fire`_
         """
-        package_declarations = itertools.chain.from_iterable(
-            self._PACKAGE.finditer(content) for content in self._contents.values())
-        for declared_package in package_declarations:
+        def make_regex(declared_package):
             root_package = declared_package[1]
             sub_packages = declared_package[2].replace('.', r'\.') if declared_package[2] else ""
-            package_regex = re.compile("({})({})".format(root_package, sub_packages))
-            self._contents = {f: package_regex.sub(self._fix_package, content) for f, content in self._contents.items()}
+            regex_str = r"(?:{}\.)?({})({})".format(self._root_package, root_package, sub_packages)
+            return re.compile(regex_str)
+
+        unique_package_regexes = set(map(
+            make_regex,
+            itertools.chain.from_iterable(
+                self._PACKAGE.finditer(content) for content in self._contents.values()
+            )
+        ))
+
+        for regex in unique_package_regexes:
+            self._contents = {
+                f: regex.sub(self._fix_package, content) for f, content in self._contents.items()
+            }
 
         return self
+
+    def content(self, filename: os.PathLike) -> str:
+        """
+        View the internal file representations
+
+        Args:
+            filename: Input file path
+
+        Returns:
+            str: contents of internal file representation
+
+        """
+        return self._contents.get(pathlib.Path(filename), f"File for filename {filename} not found. Available"
+                                                          f" filenames: {', '.join(map(str, self._contents))}")
 
     def write(self, dry_run=True):
         """
@@ -283,14 +306,15 @@ class Rewriter:
             Rewriter: Reference to self to chain commands with `fire`_
         """
 
-        if dry_run:
-            return
-
         for file, content in self._contents.items():
             out_dir = self.output_root / '/'.join(self._get_package(file).split('.'))
             out_dir.mkdir(parents=True, exist_ok=True)
 
             with open(out_dir / file.name, 'w') as output:
+                if dry_run:
+                    print(f"Fake writing {file.name} in {out_dir} since dry_run is {dry_run}.")
+                    continue
+
                 output.write(content)
 
 

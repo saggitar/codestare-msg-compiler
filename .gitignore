@@ -128,3 +128,4 @@ dmypy.json
 # Pyre type checker
 .pyre/
 /.idea
+docs/source/example_project/src/py/namespace/proto/v1/*

@@ -1,0 +1,11 @@
+syntax = "proto3";
+package namespace.general;
+
+message Success {
+    string title = 1;
+    string message = 2;
+}
+
+message SuccessList {
+    repeated namespace.general.Success elements = 1;
+}

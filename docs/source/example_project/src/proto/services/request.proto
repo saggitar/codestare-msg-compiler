@@ -1,0 +1,12 @@
+syntax = "proto3";
+package namespace.services;
+
+import "services/request/subscription.proto";
+
+message ServiceRequest {
+    string topic = 1;
+    oneof type {
+        namespace.services.request.TopicSubscription topic_subscription = 2;
+        namespace.services.request.RegexSubscription regex_subscription = 3;
+    }
+}

@@ -7,7 +7,7 @@ the generated files, or using a custom ``protoc`` plugin (like `betterproto`_).
 
 Conversely, `betterproto's <betterproto>`_ relative imports only succeed when all sources are compiled simultaneously
 (all proto files as arguments to `protoc` invocation, otherwise files might be overwritten).
-This would breaks support for build tools like cmake / make, allowing parallel compilation of ``.proto`` files
+This would break support for build tools like cmake / make, allowing parallel compilation of ``.proto`` files
 i.e. it seems not possible to implement in the official plugin.
 
 Google itself develops an `alternative protobuf module <protoplus>`_ which aims to use protocol buffers with more
@@ -573,8 +573,7 @@ class RewriteProto(PathCommand):
         self.announce(f"Enforcing python package {self.proto_package} for compiled modules.", distutils.log.INFO)
 
     def run(self) -> None:
-        rewriter = Rewriter()
-        rewriter.root_package = self.proto_package
+        rewriter = Rewriter(root_package=self.proto_package)
 
         for input, output in zip(self.inputs, self.outputs):
             rewriter.read(input)

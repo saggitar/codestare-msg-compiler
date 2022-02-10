@@ -1,0 +1,13 @@
+syntax = "proto3";
+package namespace.services;
+
+
+message Service {
+    string topic = 1;
+    repeated string tags = 4;
+    string description = 5;
+}
+
+message ServiceList {
+    repeated namespace.services.Service elements = 1;
+}
