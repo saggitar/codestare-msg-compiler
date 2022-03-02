@@ -7,11 +7,11 @@ Advanced Usage
    https://python-fire.readthedocs.io/en/latest/guide.html
 
 -   This section covers advanced usage of the CLI tools :func:`compile-proto <codestare.compiletools.compile.compile_proto>`
-    and :func:`rewrite-proto <codestare.compiletools.compile.rewrite_proto>`.
-    You need to install the ``[cli]`` extra to use them.
+    and :func:`rewrite-proto <codestare.compiletools.compile.rewrite_proto>` you need to install the ``[cli]`` extra to use
+    them.
 
--   The CLI tools are build using *fire*. Refer to the `fire`_ documentation -- especially
-    the `fire guide`_ section about chaining commands.
+-   The CLI tools are build using *fire*. Refer to the `fire`_ documentation, especially
+    the `fire guide`_ section about chaining commands for more information.
 
 -   The examples on this page use the same example project as the :ref:`setup` tutorial.
 
