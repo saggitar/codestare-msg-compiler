@@ -153,9 +153,6 @@ class CompileOption(Flag):
             kwargs['import_style'] = 'commonjs'
             args.add('binary')
 
-        if self == self.PYTHON_PROTOPLUS:
-            args.add('readable_imports')
-
         return ','.join(chain((f'{k}={v}' for k, v in kwargs.items()), args))
 
     def __str__(self):
