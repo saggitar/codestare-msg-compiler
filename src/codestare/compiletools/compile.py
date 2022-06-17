@@ -24,6 +24,7 @@ from .options import CompileOption
 
 package_regex = r'(\w+)((?:\.\w+)*)'
 check_packages = functools.partial(re.match, package_regex)
+_DEFAULT = object()
 
 
 class Compiler:
@@ -92,13 +93,14 @@ class Compiler:
 
         distutils.log.debug(" ".join(str(c) for c in protoc_command))
         if not dry_run:
+            print(' '.join(protoc_command))
             result = subprocess.call(protoc_command)
 
         if result != 0:
             sys.exit(result)
 
     def compile(self, *protoc_files,
-                options=None,
+                options=_DEFAULT,
                 quiet=False,
                 plugin_params: str = '',
                 output=os.getcwd(),
@@ -118,6 +120,9 @@ class Compiler:
             the output path
         """
         params = (plugin_params,) if plugin_params else ()
+
+        if options is _DEFAULT:
+            options = ['py']
 
         if not options:
             warnings.warn("No options specified, no compilation will take place.")
