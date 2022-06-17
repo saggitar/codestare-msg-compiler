@@ -719,9 +719,6 @@ class UbiiBuildPy(setuptools.command.build_py.build_py):
 
         super().run()
 
-    def compile_rule(self):
-        return bool(self.include_proto)
-
     sub_commands = [
         ('compile_proto', None),
     ]
