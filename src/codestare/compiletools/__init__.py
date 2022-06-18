@@ -23,7 +23,7 @@ def has_module(*modules: str):
     return True
 
 
-def find_proto_files(*paths: pathlib.Path, recursive: bool = True) -> typing.List:
+def find_proto_files(*paths: pathlib.Path, recursive: bool = True) -> typing.List[pathlib.Path]:
     """
     Return relative paths of .proto files in paths
 

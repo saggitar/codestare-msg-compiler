@@ -92,6 +92,40 @@ def compare_files():
     fu.copy_file = orig
 
 
+@contextlib.contextmanager
+def temp_dir():
+    """
+    Context manager to redirect build directory to temporary directory.
+    This is the easiest way to only "build" changed protobuf modules:
+    We build to temp dir, then copy to real build dir if files are different.
+
+    Note:
+
+        There is no way to tell the ``protoc`` compiler to only build files that have changed / updated sources.
+        This is typically the task of ``make`` or some other build script, and all files passed to ``protoc`` will
+        be built (in theory the plugin could also handle this, but none of the default plugins do). This means
+        they will have new file generation timestamps and will
+
+        - probably be marked as changed in the version control system
+        - be copied to the build directory by the python build toolchain
+
+        Because of this, we need to compare the file contents instead of the timestamps, even when building to
+        a temporary directory, see :func:`compare_files`.
+
+
+    Yields:
+        pathlib.Path: new build dir
+
+    """
+    executable = pathlib.Path(sys.executable)
+    suffix = '_'.join(p.replace('.', '_') for p in executable.parts if not p == executable.anchor)
+    tf = tempfile.TemporaryDirectory(suffix=suffix,
+                                     prefix=__name__.replace('.', '_'))
+
+    yield tf.name
+    if tf is not None:
+        tf.cleanup()
+
 class PathCommand(distutils.cmd.Command, ABC):
     """
     Abstract command class supporting verification of options representing path and directory lists
@@ -191,47 +225,6 @@ class CompileBase(PathCommand):
     
     """
 
-    @contextlib.contextmanager
-    def redirect_build_dir(self):
-        """
-        Context manager to redirect build directory to temporary directory.
-        This is the easiest way to only "build" changed protobuf modules:
-        We build to temp dir, then copy to real build dir if files are different.
-
-        Note:
-
-            There is no way to tell the ``protoc`` compiler to only build files that have changed / updated sources.
-            This is typically the task of ``make`` or some other build script, and all files passed to ``protoc`` will
-            be built (in theory the plugin could also handle this, but none of the default plugins do). This means
-            they will have new file generation timestamps and will
-
-            - probably be marked as changed in the version control system
-            - be copied to the build directory by the python build toolchain
-
-            Because of this, we need to compare the file contents instead of the timestamps, even when building to
-            a temporary directory, see :func:`compare_files`.
-
-
-            This context manager changes :attr:`.output` as a side effect
-
-        Yields:
-            Tuple[pathlib.Path, pathlib.Path]: old build dir, new build dir
-
-        """
-        original = self.output
-        tf = None
-        if not self.force:
-            executable = pathlib.Path(sys.executable)
-            suffix = '_'.join(p.replace('.', '_') for p in executable.parts if not p == executable.anchor)
-            tf = tempfile.TemporaryDirectory(suffix=suffix,
-                                             prefix=__name__.replace('.', '_'))
-            self.output = tf.name
-
-        yield original, self.output
-        if tf is not None:
-            tf.cleanup()
-
-        self.output = original
 
     def run(self):
         """
@@ -250,13 +243,15 @@ class CompileBase(PathCommand):
         """
         compiler = Compiler(protoc=self.protoc)
 
-        with self.redirect_build_dir() as (old, temp):
-            args = {k: v for k, v in vars(self).items() if k in ['options', 'output', 'includes', 'plugin_params']}
+        with temp_dir() as temp:
+            args = {k: v for k, v in vars(self).items() if k in ['options', 'includes', 'plugin_params']}
+            args['output'] = temp if not self.force else self.output
             args['quiet'] = not self.distribution.verbose
+
             compiler.compile(*self.files, **args)
 
             with compare_files():
-                self.copy_tree(temp, old)
+                self.copy_tree(args['output'], self.output)
 
         for command in self.get_sub_commands():
             self.run_command(command)
@@ -385,6 +380,7 @@ class CompileProto(PathCommand):
         flavor (str, optional): flavor of compiled code
         force (bool, optional): forcibly build everything (ignore file timestamps)
         dry_run (bool, optional): don't do anything but show protoc commands
+        clean (bool, optional): remove rewritten *.proto files after compilation
     """
 
     description = "compile protobuf files with [all] available python plugins"
@@ -406,10 +402,12 @@ class CompileProto(PathCommand):
     user_options = [
         ('include-proto', None, 'root dir for proto files'),
         ('proto-package', None, 'parent package that will be enforced for protobuf modules'),
+        ('clean', None, '*.proto files from build dir after compilation'),
+        ('keep-proto-files', None, 'keep *.proto files after compilation [default]'),
         ('build-lib', None, 'output directory for protobuf library'),
         ('flavor', None, f'flavor of compiled code, one of {",".join(flavors)}'),
         ('force', 'f', "forcibly build everything (ignore file timestamps)"),
-        ('dry-run', None, 'don\'t do anything but show protoc commands')
+        ('dry-run', None, 'don\'t do anything but show protoc commands'),
     ]
     """
     User options for :class:`distutils.cmd.Command` behaviour.
@@ -420,16 +418,20 @@ class CompileProto(PathCommand):
     User options are passed between build steps. If not supplied specifically for this build command, the following
     mapping occurs (options specified multiple times will take the first existing default value):
 
-    ============= ===========================================
-    option        default ``{command_name}.{option_name}``
-    ============= ===========================================
-    build_lib     build_py_proto.build_lib
-    include_proto build_py_proto.include_proto
-    force         build_py_proto.force
-    dry_run       build_py_proto.dry_run
-    ============= ===========================================
+    ================ ===========================================
+    option           default ``{command_name}.{option_name}``
+    ================ ===========================================
+    build_lib        build_py_proto.build_lib
+    include_proto    build_py_proto.include_proto
+    force            build_py_proto.force
+    dry_run          build_py_proto.dry_run
+    keep_proto_files build_py_proto.keep_proto_files
+    clean            build_py_proto.clean
+    ================ ===========================================
 
     """
+    boolean_options = ['clean']
+    negative_opt = {'keep-proto-files': 'clean'}
 
     def initialize_options(self) -> None:
         self.include_proto = None
@@ -438,17 +440,21 @@ class CompileProto(PathCommand):
         self.flavor = None
         self.force = None
         self.dry_run = None
+        self.clean = 0
 
     def finalize_options(self) -> None:
         self.set_undefined_options('build_py_proto',
                                    ('build_lib', 'build_lib'),
                                    ('dry_run', 'dry_run'),
                                    ('force', 'force'),
-                                   ('include_proto', 'include_proto'))
+                                   ('include_proto', 'include_proto'),
+                                   ('clean', 'clean'),
+                                   )
 
         self.ensure_path_list('include_proto')
         self.ensure_string('proto_package')
         self.ensure_string('flavor')
+
         if self.flavor is not None:
             if self.flavor not in self.flavors:
                 raise distutils.errors.DistutilsOptionError(
@@ -508,24 +514,73 @@ class CompileProto(PathCommand):
         return (self.proto_package is not None
                 and self.include_proto)
 
+    def clean_rule(self):
+        return (self.proto_package is not None
+                and self.clean)
+
     sub_commands = [
         ('rewrite_proto', rewrite_rule),
         ('compile_python', basic_python_rule),
         ('compile_betterproto', better_proto_rule),
         ('compile_mypy', mypy_rule),
         ('compile_protoplus', proto_plus_rule),
+        ('clean_proto', clean_rule),
     ]
+
+class CleanProto(PathCommand):
+    """
+    Setuptools command to clean ``.proto`` sources after compilation.
+    Respects dry-run setting from compile_proto.
+
+    Attributes:
+    clean_dirs (List[str]): directories where all *.proto files will be removed
+    recursive (bool): also remove files in sub-directories of clean_dir [default]
+    dry_run (bool): fake clean only print paths
+    """
+
+    description = "clean *.proto files in directory tree"
+
+    user_options = [
+        ('clean-dirs', None, 'directories that will be searched for *.proto files'),
+        ('recursive', None, 'also search in subdirectories of clean_dir [default]'),
+        ('no-recursive', None, 'only remove files from clean_dir'),
+    ]
+
+    boolean_options = ['recursive']
+    negative_opt = {'no-recursive': 'recursive'}
+
+    def initialize_options(self) -> None:
+        self.dry_run = None
+        self.clean_dirs = None
+        self.recursive = 1
+
+    def finalize_options(self) -> None:
+        self.set_undefined_options('rewrite_proto',
+                                   ('outputs', 'clean_dirs')
+                                   )
+        self.set_undefined_options('compile_proto',
+                                   ('dry_run', 'dry_run'),
+                                   )
+        self.ensure_dir_list('clean_dirs')
+
+    def run(self) -> None:
+        for path in find_proto_files(*self.clean_dirs, recursive=bool(self.recursive)):
+            self.announce(f"Removing {path}", distutils.log.INFO)
+            if not self.dry_run:
+                path.unlink()
+
 
 
 class RewriteProto(PathCommand):
     """
     Setuptools command to rewrite ``.proto`` sources in a way that produces a specified python package structure.
+    Respects dry-run setting from compile_proto.
 
     Attributes:
-        proto-package (str): parent package that will be enforced for protobuf modules
+        proto_package (str): parent package that will be enforced for protobuf modules
         inplace (bool): write output to compile_proto include directory
         use_build (bool): write output to build_lib directory [default]
-
+        dry_run (bool): fake write only print paths
     """
     description = "rewrite protobuf inputs to fake specific package structure (experimental)"
 
@@ -597,9 +652,8 @@ class GenerateInits(PathCommand):
 
     user_options = [
         ('packages', None, 'generate for these packages only'),
-        (
-            'recursive', None,
-            'if set, you only need to specify parent packages, all subpackages will also be considered'),
+        ('recursive', None, 'if set, you only need to specify parent '
+                            'packages, all subpackages will also be considered'),
         ('no-recursive', None, 'only the exact packages specified in `packages` are considered. [default]'),
         ('import_style', None, f'One of: {", ".join(styles)}. See documentation for details about generated inits'),
     ]
