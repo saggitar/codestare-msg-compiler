@@ -299,7 +299,7 @@ class Rewriter:
         return self._contents.get(pathlib.Path(filename), f"File for filename {filename} not found. Available"
                                                           f" filenames: {', '.join(map(str, self._contents))}")
 
-    def write(self, dry_run=True):
+    def write(self, dry_run=True) -> List[str]:
         """
         Write internal content representation to :attr:`.output_root` according to
         internal :attr:`package mapping <.calculated_packages>`
@@ -310,6 +310,7 @@ class Rewriter:
         Returns:
             Rewriter: Reference to self to chain commands with `fire`_
         """
+        written = []
 
         for file, content in self._contents.items():
             out_dir = self.output_root / '/'.join(self._get_package(file).split('.'))
@@ -321,6 +322,9 @@ class Rewriter:
                     continue
 
                 output.write(content)
+                written += [os.fspath(out_dir / file.name)]
+
+        return written
 
 
 def check_fire():
