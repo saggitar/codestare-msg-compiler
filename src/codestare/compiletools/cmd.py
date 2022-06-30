@@ -46,7 +46,7 @@ import re
 import sys
 import tempfile
 from abc import ABC
-from typing import List, Optional
+from typing import List, Optional, Mapping
 
 import setuptools.command.build_py
 import setuptools.command.egg_info
@@ -402,8 +402,6 @@ class CompileProto(PathCommand):
     user_options = [
         ('include-proto', None, 'root dir for proto files'),
         ('proto-package', None, 'parent package that will be enforced for protobuf modules'),
-        ('clean', None, '*.proto files from build dir after compilation'),
-        ('keep-proto-files', None, 'keep *.proto files after compilation [default]'),
         ('build-lib', None, 'output directory for protobuf library'),
         ('flavor', None, f'flavor of compiled code, one of {",".join(flavors)}'),
         ('force', 'f', "forcibly build everything (ignore file timestamps)"),
@@ -426,12 +424,9 @@ class CompileProto(PathCommand):
     force            build_py_proto.force
     dry_run          build_py_proto.dry_run
     keep_proto_files build_py_proto.keep_proto_files
-    clean            build_py_proto.clean
     ================ ===========================================
 
     """
-    boolean_options = ['clean']
-    negative_opt = {'keep-proto-files': 'clean'}
 
     def initialize_options(self) -> None:
         self.include_proto = None
@@ -514,9 +509,6 @@ class CompileProto(PathCommand):
         return (self.proto_package is not None
                 and self.include_proto)
 
-    def clean_rule(self):
-        return (self.proto_package is not None
-                and self.clean)
 
     sub_commands = [
         ('rewrite_proto', rewrite_rule),
@@ -524,7 +516,6 @@ class CompileProto(PathCommand):
         ('compile_betterproto', better_proto_rule),
         ('compile_mypy', mypy_rule),
         ('compile_protoplus', proto_plus_rule),
-        ('clean_proto', clean_rule),
     ]
 
 class CleanProto(PathCommand):
@@ -717,9 +708,12 @@ class GenerateInits(PathCommand):
 
         skipped = []
 
-        for package in itertools.chain(*searches):
-            init: pathlib.Path = package / '__init__.py'
-            name = '.'.join(package.relative_to(self.package_root).parts)
+        for path in itertools.chain(*searches):
+            if not path.is_dir():
+                continue
+
+            init: pathlib.Path = path / '__init__.py'
+            name = '.'.join(path.relative_to(self.package_root).parts)
             if init.exists() and not self.force:
                 skipped += [name]
                 distutils.log.debug(f"Not generating {init}, already existing. Use --force")
@@ -745,16 +739,36 @@ class GenerateInits(PathCommand):
             self.announce(f"No init files generated for {self.package_root}", distutils.log.INFO)
 
 
-class UbiiBuildPy(setuptools.command.build_py.build_py):
-    def __getattr__(self, item):
-        if item == 'user_options':
-            return setuptools.command.build_py.build_py.user_options + CompileProto.user_options
+def _combined_iterable_attribute(objects, name):
+    return list(itertools.chain.from_iterable(getattr(obj, name, ()) for obj in objects))
 
-        return setuptools.command.build_py.build_py.__getattr__(self, item)
+
+def _combined_map_attribute(objects, name):
+    maps: List[Mapping] = [getattr(obj, name, {}) for obj in objects]
+    return {k: v for k, v in itertools.chain.from_iterable(m.items() for m in maps)}
+
+
+class UbiiBuildPy(setuptools.command.build_py.build_py):
+    command_hierarchy = (CompileProto, setuptools.command.build_py)
+    _all_options = [
+        *_combined_iterable_attribute(command_hierarchy, 'user_options'),
+        ('keep-proto-files', None, 'keep *.proto files after compilation [default]'),
+        ('clean', None, '*.proto files from build dir after compilation'),
+    ]
+    boolean_options = [
+        *_combined_iterable_attribute(command_hierarchy, 'boolean_options'),
+        'clean',
+    ]
+    negative_opt = {
+        **_combined_map_attribute(command_hierarchy, 'negative_opt'),
+        'keep-proto-files': 'clean'
+    }
+    user_options = [next(g) for _, g in itertools.groupby(_all_options, lambda t: t[0])]  # unique first key
 
     def initialize_options(self) -> None:
         super().initialize_options()
         self.include_proto = None
+        self.clean = 0
 
     def finalize_options(self) -> None:
         super().finalize_options()
@@ -772,6 +786,10 @@ class UbiiBuildPy(setuptools.command.build_py.build_py):
             self.run_command(command)
 
         super().run()
+
+        build_py_proto = self.get_finalized_command('build_py_proto')
+        if build_py_proto.clean:
+            self.run_command('clean_proto')
 
     sub_commands = [
         ('compile_proto', None),
